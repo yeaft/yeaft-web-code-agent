@@ -15,6 +15,7 @@ import { useCreationsStore, sendInitialCreationPrompt } from '../../stores/creat
 import * as creationStores from '../../stores/creations.js';
 import { isSafeSameOriginPreviewUrl } from '../cosmos/creations/sanitize.js';
 import { createRouteBoundWorkbenchStore, workbenchRouteKey } from '../../utils/workbench-route.js';
+import { CREATION_CATEGORIES, resolveCreationCategory } from '../../utils/creation-categories.js';
 import FileCanvasView, { binaryDraftWarning } from './FileCanvasView.js';
 import { getLocale } from '../../utils/i18n.js';
 import CreationCreateModal from './CreationCreateModal.js';
@@ -342,14 +343,57 @@ export default {
 
       <!-- ==================== ACTIVE WORKSPACE VIEW ==================== -->
       <div v-else class="creation-wb-workspace">
-        <!-- Workspace Header -->
-        <header class="creation-wb-header">
-          <div class="creation-wb-title-block">
-            <span class="creation-kind-swatch" :class="kindSwatchClass(activeCreation?.kind)" aria-hidden="true"></span>
-            <div class="creation-wb-title-meta">
-              <span class="creation-wb-title" :title="activeTitle">{{ activeTitle }}</span>
-              <span class="creation-wb-path creation-wb-mono" :title="activeRootDir">{{ shortenPath(activeRootDir) }}</span>
-            </div>
+        <!-- Unified 40px Workspace Topbar (Title Switcher + Segmented Tabs + [+]/[···]) -->
+        <header class="creation-wb-topbar">
+          <button
+            type="button"
+            class="creation-wb-title-trigger"
+            :title="activeRootDir || activeTitle"
+            :aria-label="tr('creation.workbench.switchCreation', 'Switch Creation')"
+            @click="showCreationSwitcher"
+          >
+            <span class="creation-kind-swatch" :class="activeSwatchClass" aria-hidden="true"></span>
+            <span class="creation-wb-title">{{ activeTitle }}</span>
+            <svg class="creation-wb-title-caret" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+              <path fill="currentColor" d="M4.5 6L8 9.5 11.5 6z" />
+            </svg>
+          </button>
+
+          <!-- Center 3-Modality Segmented Tabs -->
+          <div class="creation-wb-tabs" role="tablist" :aria-label="tr('creation.workbench.modalities', 'Workspace views')">
+            <button
+              type="button"
+              role="tab"
+              class="creation-wb-tab"
+              :class="{ active: activeModality === 'docs' }"
+              :aria-selected="activeModality === 'docs'"
+              @click="activeModality = 'docs'"
+            >
+              <span>{{ tr('creation.workbench.docs', 'Documents') }}</span>
+              <span v-if="docFiles.length > 0" class="creation-wb-tab-count">{{ docFiles.length }}</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              class="creation-wb-tab"
+              :class="{ active: activeModality === 'images' }"
+              :aria-selected="activeModality === 'images'"
+              @click="activeModality = 'images'"
+            >
+              <span>{{ tr('creation.workbench.images', 'Images') }}</span>
+              <span v-if="imageFiles.length > 0" class="creation-wb-tab-count">{{ imageFiles.length }}</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              class="creation-wb-tab"
+              :class="{ active: activeModality === 'videos' }"
+              :aria-selected="activeModality === 'videos'"
+              @click="activeModality = 'videos'"
+            >
+              <span>{{ tr('creation.workbench.videos', 'Videos') }}</span>
+              <span v-if="videoFiles.length > 0" class="creation-wb-tab-count">{{ videoFiles.length }}</span>
+            </button>
           </div>
 
           <div class="creation-wb-header-actions">
@@ -362,7 +406,7 @@ export default {
                 :aria-label="tr('creation.workbench.addMenu', 'Create or upload')"
                 :aria-expanded="addMenuOpen"
                 aria-haspopup="menu"
-                @click.stop="addMenuOpen = !addMenuOpen"
+                @click.stop="toggleAddMenu"
               >
                 <NavigationIcon name="add" :size="16" />
               </button>
@@ -379,45 +423,69 @@ export default {
               </div>
             </div>
 
-            <!-- Refresh -->
-            <button
-              type="button"
-              class="creation-wb-icon-btn"
-              :disabled="scanning"
-              :title="tr('creation.workbench.refresh', 'Refresh folder')"
-              :aria-label="tr('creation.workbench.refresh', 'Refresh folder')"
-              @click="refreshWorkspace"
-            >
-              <svg :class="{ 'is-spinning': scanning }" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
-                <path fill="currentColor" d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" />
-              </svg>
-            </button>
-
-            <!-- Open in Files -->
-            <button
-              type="button"
-              class="creation-wb-text-btn"
-              :title="tr('creation.workbench.openInFiles', 'Open in Files')"
-              @click="openWorkspaceInFiles()"
-            >
-              <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
-                <path fill="currentColor" d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
-              </svg>
-              <span>{{ tr('creation.workbench.openInFiles', 'Files') }}</span>
-            </button>
-
-            <!-- Switch Creation -->
-            <button
-              type="button"
-              class="creation-wb-icon-btn"
-              :title="tr('creation.workbench.switchCreation', 'Switch Creation')"
-              :aria-label="tr('creation.workbench.switchCreation', 'Switch Creation')"
-              @click="showCreationSwitcher"
-            >
-              <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
-                <path fill="currentColor" d="M6.99 11L3 15l3.99 4v-3H14v-2H6.99v-3zM21 9l-3.99-4v3H10v2h7.01v3L21 9z" />
-              </svg>
-            </button>
+            <!-- [···] Overflow Menu -->
+            <div class="creation-wb-menu-wrap" ref="moreMenuWrap">
+              <button
+                type="button"
+                class="creation-wb-icon-btn"
+                :title="tr('creation.workbench.moreActions', 'More actions')"
+                :aria-label="tr('creation.workbench.moreActions', 'More actions')"
+                :aria-expanded="moreMenuOpen"
+                aria-haspopup="menu"
+                @click.stop="toggleMoreMenu"
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                  <path fill="currentColor" d="M6 10a2 2 0 110 4 2 2 0 010-4zm6 0a2 2 0 110 4 2 2 0 010-4zm6 0a2 2 0 110 4 2 2 0 010-4z" />
+                </svg>
+              </button>
+              <div v-if="moreMenuOpen" class="ctx-menu creation-wb-more-menu" role="menu">
+                <button
+                  type="button"
+                  class="ctx-menu-item"
+                  role="menuitem"
+                  :disabled="scanning"
+                  @click="onMoreRefresh"
+                >
+                  {{ tr('creation.workbench.refresh', 'Refresh') }}
+                </button>
+                <button
+                  type="button"
+                  class="ctx-menu-item"
+                  role="menuitem"
+                  @click="onMoreOpenInFiles"
+                >
+                  {{ tr('creation.workbench.openInFiles', 'Open in Files') }}
+                </button>
+                <div v-if="activeCreation?.id" class="creation-wb-more-section">
+                  <div class="creation-wb-more-section-label">
+                    {{ tr('creation.workbench.categoryLabel', 'Category') }}
+                  </div>
+                  <div class="creation-wb-category-pills" role="radiogroup" :aria-label="tr('creation.workbench.categoryLabel', 'Category')">
+                    <button
+                      v-for="cat in categories"
+                      :key="cat.id"
+                      type="button"
+                      role="radio"
+                      class="creation-wb-category-pill"
+                      :class="{ active: activeCategory === cat.id }"
+                      :aria-checked="activeCategory === cat.id"
+                      @click="onChangeCategory(cat.id)"
+                    >
+                      <span class="creation-kind-swatch" :class="cat.swatchClass" aria-hidden="true"></span>
+                      <span>{{ tr(cat.labelKey, cat.id) }}</span>
+                    </button>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  class="ctx-menu-item"
+                  role="menuitem"
+                  @click="onMoreSwitchCreation"
+                >
+                  {{ tr('creation.workbench.switchCreation', 'Switch Creation') }}
+                </button>
+              </div>
+            </div>
           </div>
         </header>
 
@@ -470,43 +538,6 @@ export default {
           <button type="button" class="creation-wb-banner-close" :aria-label="tr('common.close', 'Close')" @click="feedback = null">×</button>
         </div>
 
-        <!-- 3-Modality Tab Bar -->
-        <div class="creation-wb-tabs" role="tablist" :aria-label="tr('creation.workbench.modalities', 'Workspace views')">
-          <button
-            type="button"
-            role="tab"
-            class="creation-wb-tab"
-            :class="{ active: activeModality === 'docs' }"
-            :aria-selected="activeModality === 'docs'"
-            @click="activeModality = 'docs'"
-          >
-            <span>{{ tr('creation.workbench.docs', 'Documents') }}</span>
-            <span class="creation-wb-tab-count">{{ docFiles.length }}</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            class="creation-wb-tab"
-            :class="{ active: activeModality === 'images' }"
-            :aria-selected="activeModality === 'images'"
-            @click="activeModality = 'images'"
-          >
-            <span>{{ tr('creation.workbench.images', 'Images') }}</span>
-            <span class="creation-wb-tab-count">{{ imageFiles.length }}</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            class="creation-wb-tab"
-            :class="{ active: activeModality === 'videos' }"
-            :aria-selected="activeModality === 'videos'"
-            @click="activeModality = 'videos'"
-          >
-            <span>{{ tr('creation.workbench.videos', 'Videos') }}</span>
-            <span class="creation-wb-tab-count">{{ videoFiles.length }}</span>
-          </button>
-        </div>
-
         <!-- ==================== DOCUMENTS PANE ==================== -->
         <div v-show="activeModality === 'docs'" class="creation-wb-docs-pane" :class="{ 'is-tree-open': docTreeOpen }" role="tabpanel">
           <!-- Narrow-container collapsible top bar -->
@@ -526,12 +557,6 @@ export default {
             <span v-if="activeDocFile" class="creation-wb-docs-bar-name" :title="activeDocFile.relPath">
               {{ activeDocFile.name }}<span v-if="activeDocFile.isDirty" class="creation-wb-dirty-dot" aria-hidden="true"> ●</span>
             </span>
-            <button
-              type="button"
-              class="creation-wb-tree-btn"
-              :title="tr('creation.workbench.newDoc', 'New Document')"
-              @click="openMiniDialog('doc')"
-            >+ {{ tr('creation.workbench.docShort', 'Doc') }}</button>
           </div>
 
           <!-- Collapsed tree rail (wide container) -->
@@ -554,18 +579,6 @@ export default {
             <div class="creation-wb-doc-tree-head">
               <span class="creation-wb-doc-tree-label">{{ tr('creation.workbench.docs', 'Documents') }}</span>
               <div class="creation-wb-doc-tree-actions">
-                <button
-                  type="button"
-                  class="creation-wb-tree-btn"
-                  :title="tr('creation.workbench.newDoc', 'New Document')"
-                  @click="openMiniDialog('doc')"
-                >+ {{ tr('creation.workbench.docShort', 'Doc') }}</button>
-                <button
-                  type="button"
-                  class="creation-wb-tree-btn"
-                  :title="tr('creation.workbench.newFolder', 'New Folder')"
-                  @click="openMiniDialog('folder')"
-                >+ {{ tr('creation.workbench.folderShort', 'Folder') }}</button>
                 <button
                   type="button"
                   class="creation-wb-icon-btn is-sm"
@@ -599,6 +612,8 @@ export default {
                   'is-folder': node.type === 'folder',
                   'is-active': node.type === 'file' && activeDocPath === node.path,
                   'is-dirty': node.type === 'file' && isDocDirty(node.path),
+                  'is-status-review': node.type === 'file' && docStatusForRelPath(node.relPath) === 'review',
+                  'is-status-final': node.type === 'file' && docStatusForRelPath(node.relPath) === 'final',
                 }"
                 :style="{ paddingLeft: (8 + node.depth * 14) + 'px' }"
                 :title="node.relPath"
@@ -610,6 +625,18 @@ export default {
                 </span>
                 <span v-else class="creation-wb-tree-caret is-spacer" aria-hidden="true"></span>
                 <span class="creation-wb-tree-name">{{ node.name }}</span>
+                <span
+                  v-if="node.type === 'file' && docStatusForRelPath(node.relPath) === 'review'"
+                  class="creation-wb-status-dot is-review"
+                  :title="tr('creation.docStatus.review', 'In review')"
+                  aria-hidden="true"
+                ></span>
+                <span
+                  v-else-if="node.type === 'file' && docStatusForRelPath(node.relPath) === 'final'"
+                  class="creation-wb-status-dot is-final"
+                  :title="tr('creation.docStatus.final', 'Final')"
+                  aria-hidden="true"
+                >✓</span>
                 <span
                   v-if="node.type === 'file' && isDocDirty(node.path)"
                   class="creation-wb-dirty-dot"
@@ -625,13 +652,18 @@ export default {
               v-if="activeDocFile"
               :file="activeDocFile"
               :route-key="routeKey"
+              :agent-id="agentId"
+              :creation-id="activeCreation?.id || ''"
+              :category="activeCategory"
+              :doc-status="activeDocStatus"
               :saving="Boolean(activeDocFile.saving)"
               :show-header="true"
-              :show-open-in-files="true"
+              :show-open-in-files="false"
               :show-promote-folder="false"
               :resolve-media-url="resolveCreationRelativeMediaUrl"
               :media-url-version="mediaPreviewVersion"
               @update:content="onDocContentUpdate"
+              @update:doc-status="onDocStatusChange"
               @save="saveDoc()"
               @reload-from-disk="reloadActiveDocFromDisk"
               @overwrite-disk="overwriteActiveDocOnDisk"
@@ -650,37 +682,23 @@ export default {
 
         <!-- ==================== IMAGES PANE ==================== -->
         <div v-show="activeModality === 'images'" class="creation-wb-media-pane" role="tabpanel">
-          <!-- Image Canvas Detail View -->
+          <!-- Image Canvas Detail View (navigation merged into FileCanvasView toolbar) -->
           <div v-if="activeImageFile" class="creation-wb-media-detail">
-            <div class="creation-wb-media-bar">
-              <button type="button" class="creation-wb-text-btn" @click="selectedImagePath = ''">
-                ← {{ tr('creation.workbench.backToGrid', 'Back to Grid') }}
-              </button>
-              <span class="creation-wb-media-bar-name" :title="activeImageFile.relPath">{{ activeImageFile.name }}</span>
-              <div class="creation-wb-media-nav">
-                <button
-                  type="button"
-                  class="creation-wb-text-btn"
-                  :disabled="activeImageIndex <= 0"
-                  @click="selectImageAt(activeImageIndex - 1)"
-                >{{ tr('common.prev', 'Prev') }}</button>
-                <span class="creation-wb-media-counter">{{ activeImageIndex + 1 }} / {{ imageFiles.length }}</span>
-                <button
-                  type="button"
-                  class="creation-wb-text-btn"
-                  :disabled="activeImageIndex >= imageFiles.length - 1"
-                  @click="selectImageAt(activeImageIndex + 1)"
-                >{{ tr('common.next', 'Next') }}</button>
-              </div>
-            </div>
             <div class="creation-wb-media-canvas-host">
               <FileCanvasView
                 :file="activeImageFile"
                 :route-key="routeKey"
+                :agent-id="agentId"
+                :creation-id="activeCreation?.id || ''"
+                :category="activeCategory"
                 :saving="false"
                 :show-header="true"
-                :show-open-in-files="true"
+                :show-open-in-files="false"
                 :show-promote-folder="false"
+                :media-nav="{ index: activeImageIndex, total: imageFiles.length, title: activeImageFile.name }"
+                @media-back="selectedImagePath = ''"
+                @media-prev="selectImageAt(activeImageIndex - 1)"
+                @media-next="selectImageAt(activeImageIndex + 1)"
                 @download="downloadFile(activeImageFile)"
                 @open-in-files="openFileInFiles(activeImageFile)"
                 @media-load="onMediaLoad"
@@ -745,37 +763,23 @@ export default {
 
         <!-- ==================== VIDEOS PANE ==================== -->
         <div v-show="activeModality === 'videos'" class="creation-wb-media-pane" role="tabpanel">
-          <!-- Video Canvas Detail View -->
+          <!-- Video Canvas Detail View (navigation merged into FileCanvasView toolbar) -->
           <div v-if="activeVideoFile" class="creation-wb-media-detail">
-            <div class="creation-wb-media-bar">
-              <button type="button" class="creation-wb-text-btn" @click="selectedVideoPath = ''">
-                ← {{ tr('creation.workbench.backToGrid', 'Back to Grid') }}
-              </button>
-              <span class="creation-wb-media-bar-name" :title="activeVideoFile.relPath">{{ activeVideoFile.name }}</span>
-              <div class="creation-wb-media-nav">
-                <button
-                  type="button"
-                  class="creation-wb-text-btn"
-                  :disabled="activeVideoIndex <= 0"
-                  @click="selectVideoAt(activeVideoIndex - 1)"
-                >{{ tr('common.prev', 'Prev') }}</button>
-                <span class="creation-wb-media-counter">{{ activeVideoIndex + 1 }} / {{ videoFiles.length }}</span>
-                <button
-                  type="button"
-                  class="creation-wb-text-btn"
-                  :disabled="activeVideoIndex >= videoFiles.length - 1"
-                  @click="selectVideoAt(activeVideoIndex + 1)"
-                >{{ tr('common.next', 'Next') }}</button>
-              </div>
-            </div>
             <div class="creation-wb-media-canvas-host">
               <FileCanvasView
                 :file="activeVideoFile"
                 :route-key="routeKey"
+                :agent-id="agentId"
+                :creation-id="activeCreation?.id || ''"
+                :category="activeCategory"
                 :saving="false"
                 :show-header="true"
-                :show-open-in-files="true"
+                :show-open-in-files="false"
                 :show-promote-folder="false"
+                :media-nav="{ index: activeVideoIndex, total: videoFiles.length, title: activeVideoFile.name }"
+                @media-back="selectedVideoPath = ''"
+                @media-prev="selectVideoAt(activeVideoIndex - 1)"
+                @media-next="selectVideoAt(activeVideoIndex + 1)"
                 @download="downloadFile(activeVideoFile)"
                 @open-in-files="openFileInFiles(activeVideoFile)"
                 @media-load="onMediaLoad"
@@ -857,6 +861,7 @@ export default {
 
     const rootEl = Vue.ref(null);
     const addMenuWrap = Vue.ref(null);
+    const moreMenuWrap = Vue.ref(null);
     const uploadInputRef = Vue.ref(null);
     const miniDialogInputRef = Vue.ref(null);
 
@@ -872,6 +877,7 @@ export default {
     const docTreeOpen = Vue.ref(true);
     const isNarrowContainer = Vue.ref(false);
     const addMenuOpen = Vue.ref(false);
+    const moreMenuOpen = Vue.ref(false);
     const scanning = Vue.ref(false);
     const uploading = Vue.ref(false);
     const uploadTargetSubdir = Vue.ref('images');
@@ -1104,6 +1110,77 @@ export default {
       const norm = normalizePath(activeRootDir.value);
       return norm.split('/').filter(Boolean).pop() || tr('creation.workbench.onboardingTitle', 'Creation Workspace');
     });
+
+    const activeCategory = Vue.computed(() => resolveCreationCategory(activeCreation.value));
+
+    const activeSwatchClass = Vue.computed(() => {
+      const cat = CREATION_CATEGORIES.find((c) => c.id === activeCategory.value);
+      return cat ? cat.swatchClass : kindSwatchClass(activeCreation.value?.kind);
+    });
+
+    const docStatusForRelPath = (relPath) => {
+      const cid = activeCreation.value?.id;
+      if (!cid || !relPath || typeof creationsStore.getDocState !== 'function') return 'draft';
+      return creationsStore.getDocState(props.agentId, cid, relPath)?.status || 'draft';
+    };
+
+    const activeDocStatus = Vue.computed(() => {
+      const rel = activeDocFile.value?.relPath;
+      return rel ? docStatusForRelPath(rel) : 'draft';
+    });
+
+    const onDocStatusChange = async (nextStatus) => {
+      const cid = activeCreation.value?.id;
+      const rel = activeDocFile.value?.relPath;
+      if (!cid || !rel || typeof creationsStore.setDocState !== 'function') return;
+      try {
+        await creationsStore.setDocState(props.agentId, cid, rel, nextStatus);
+      } catch (err) {
+        showFeedback(false, err?.message || tr('creation.workbench.saveFailed', 'Failed to update status'));
+      }
+    };
+
+    const toggleAddMenu = () => {
+      moreMenuOpen.value = false;
+      addMenuOpen.value = !addMenuOpen.value;
+    };
+
+    const toggleMoreMenu = () => {
+      addMenuOpen.value = false;
+      moreMenuOpen.value = !moreMenuOpen.value;
+    };
+
+    const onMoreRefresh = () => {
+      moreMenuOpen.value = false;
+      refreshWorkspace();
+    };
+
+    const onMoreOpenInFiles = () => {
+      moreMenuOpen.value = false;
+      openWorkspaceInFiles();
+    };
+
+    const onMoreSwitchCreation = () => {
+      moreMenuOpen.value = false;
+      showCreationSwitcher();
+    };
+
+    const onChangeCategory = async (categoryId) => {
+      const cid = activeCreation.value?.id;
+      if (!cid || !categoryId || categoryId === activeCategory.value) {
+        moreMenuOpen.value = false;
+        return;
+      }
+      moreMenuOpen.value = false;
+      try {
+        const updated = await creationsStore.updateCreation(props.agentId, cid, { category: categoryId });
+        if (activeCreation.value && activeCreation.value.id === cid) {
+          activeCreation.value = { ...activeCreation.value, ...(updated || {}), category: categoryId };
+        }
+      } catch (err) {
+        showFeedback(false, err?.message || tr('creation.workbench.saveFailed', 'Failed to update category'));
+      }
+    };
 
     const docTree = Vue.computed(() => buildDocTree(docFiles.value, activeRootDir.value));
     const flattenedDocTree = Vue.computed(() => flattenDocTree(docTree.value, expandedDocFolders));
@@ -2440,6 +2517,9 @@ export default {
       if (addMenuOpen.value && !addMenuWrap.value?.contains(event.target)) {
         addMenuOpen.value = false;
       }
+      if (moreMenuOpen.value && !moreMenuWrap.value?.contains(event.target)) {
+        moreMenuOpen.value = false;
+      }
     };
 
     const onRootKeydown = (event) => {
@@ -2493,6 +2573,16 @@ export default {
         { immediate: true },
       );
     }
+
+    // Load doc workflow states whenever activeCreation changes
+    Vue.watch(
+      () => activeCreation.value?.id,
+      (creationId) => {
+        if (!creationId || !props.agentId || typeof creationsStore.loadDocStates !== 'function') return;
+        void creationsStore.loadDocStates(props.agentId, creationId).catch(() => {});
+      },
+      { immediate: true },
+    );
 
     // Watch active modality to lazily pump thumbnails when switching to Images
     Vue.watch(activeModality, (mod) => {
@@ -2601,8 +2691,10 @@ export default {
     });
 
     return {
+      categories: CREATION_CATEGORIES,
       rootEl,
       addMenuWrap,
+      moreMenuWrap,
       uploadInputRef,
       miniDialogInputRef,
       activeCreation,
@@ -2615,10 +2707,14 @@ export default {
       createModalOpen,
       agentCreations,
       activeTitle,
+      activeCategory,
+      activeSwatchClass,
+      activeDocStatus,
       activeModality,
       docTreeOpen,
       isNarrowContainer,
       addMenuOpen,
+      moreMenuOpen,
       scanning,
       uploading,
       uploadAccept,
@@ -2645,6 +2741,14 @@ export default {
       kindSwatchClass,
       formatSize,
       isDocDirty,
+      docStatusForRelPath,
+      onDocStatusChange,
+      toggleAddMenu,
+      toggleMoreMenu,
+      onMoreRefresh,
+      onMoreOpenInFiles,
+      onMoreSwitchCreation,
+      onChangeCategory,
       showCreationSwitcher,
       openCreateModal,
       onCreationCreated,

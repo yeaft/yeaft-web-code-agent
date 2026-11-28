@@ -2,13 +2,17 @@ import { canonicalizeCreationUrl, isSafeCreationUrl, isSafeSameOriginPreviewUrl,
 import { openImagePreview } from '../../utils/imagePreview.js';
 import { getLocale } from '../../utils/i18n.js';
 import { addCanvasContextRef, formatTimestampLabel } from '../../utils/canvas-context.js';
+import { DOC_WORKFLOW_STATUSES } from '../../utils/creation-categories.js';
+import { useCreationsStore } from '../../stores/creations.js';
 import SvgPreview from '../files/SvgPreview.js';
+import CanvasInlineEditPopover from './CanvasInlineEditPopover.js';
+import CanvasReviewPanel from './CanvasReviewPanel.js';
 
 const DOC_EXTS = new Set(['.md', '.markdown', '.mdx', '.txt']);
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.avif']);
 const VIDEO_EXTS = new Set(['.mp4', '.webm', '.mov', '.m4v', '.ogg', '.ogv']);
 const MARKDOWN_EXTS = new Set(['.md', '.markdown', '.mdx']);
-const PLAYBACK_RATES = [0.75, 1, 1.25, 1.5, 2];
+const FALLBACK_DOC_STATUSES = ['draft', 'review', 'final'];
 
 function getExtension(fileOrName) {
   const raw = typeof fileOrName === 'string'
@@ -285,9 +289,78 @@ function lineRangeFromOffsets(content, startOffset, endOffset) {
   return { lineStart, lineEnd };
 }
 
+function useSafeCreationsStore() {
+  try {
+    return useCreationsStore();
+  } catch {
+    return null;
+  }
+}
+
+function applyTextReplacement(content, originalText, revisedText, lineStart, lineEnd) {
+  const src = String(content ?? '');
+  const orig = String(originalText ?? '');
+  const rev = String(revisedText ?? '');
+  if (!orig) return src;
+
+  const lines = src.split('\n');
+  const hasRange = Number.isInteger(lineStart) && lineStart >= 1;
+  if (hasRange) {
+    const startIdx = Math.max(0, lineStart - 1);
+    const endIdx = Math.min(lines.length - 1, Math.max(startIdx, (Number.isInteger(lineEnd) ? lineEnd : lineStart) - 1));
+    const windowStart = Math.max(0, startIdx - 1);
+    const windowEnd = Math.min(lines.length - 1, endIdx + 1);
+    const windowText = lines.slice(windowStart, windowEnd + 1).join('\n');
+
+    const inWindowIdx = windowText.indexOf(orig);
+    if (inWindowIdx >= 0) {
+      const updatedWindow = windowText.slice(0, inWindowIdx) + rev + windowText.slice(inWindowIdx + orig.length);
+      return [
+        ...lines.slice(0, windowStart),
+        updatedWindow,
+        ...lines.slice(windowEnd + 1),
+      ].join('\n');
+    }
+    const trimmedOrig = orig.trim();
+    const inWindowTrimIdx = trimmedOrig ? windowText.indexOf(trimmedOrig) : -1;
+    if (inWindowTrimIdx >= 0) {
+      const updatedWindow = windowText.slice(0, inWindowTrimIdx) + rev + windowText.slice(inWindowTrimIdx + trimmedOrig.length);
+      return [
+        ...lines.slice(0, windowStart),
+        updatedWindow,
+        ...lines.slice(windowEnd + 1),
+      ].join('\n');
+    }
+  }
+
+  const directIdx = src.indexOf(orig);
+  if (directIdx >= 0) {
+    return src.slice(0, directIdx) + rev + src.slice(directIdx + orig.length);
+  }
+
+  const trimmed = orig.trim();
+  const trimIdx = trimmed ? src.indexOf(trimmed) : -1;
+  if (trimIdx >= 0) {
+    return src.slice(0, trimIdx) + rev + src.slice(trimIdx + trimmed.length);
+  }
+
+  // Fallback when selection came from rendered Markdown (syntax markers stripped)
+  if (hasRange) {
+    const startIdx = Math.max(0, lineStart - 1);
+    const endIdx = Math.min(lines.length - 1, Math.max(startIdx, (Number.isInteger(lineEnd) ? lineEnd : lineStart) - 1));
+    return [
+      ...lines.slice(0, startIdx),
+      rev,
+      ...lines.slice(endIdx + 1),
+    ].join('\n');
+  }
+
+  return src;
+}
+
 export default {
   name: 'FileCanvasView',
-  components: { SvgPreview },
+  components: { SvgPreview, CanvasInlineEditPopover, CanvasReviewPanel },
   props: {
     file: { type: Object, required: true },
     routeKey: { type: String, default: '' },
@@ -298,8 +371,29 @@ export default {
     showPromoteFolder: { type: Boolean, default: false },
     resolveMediaUrl: { type: Function, default: null },
     mediaUrlVersion: { type: Number, default: 0 },
+    agentId: { type: String, default: '' },
+    creationId: { type: String, default: '' },
+    category: { type: String, default: 'book' },
+    docStatus: { type: String, default: 'draft' },
+    mediaNav: { type: Object, default: null },
   },
-  emits: ['update:content', 'save', 'reload-from-disk', 'overwrite-disk', 'download', 'open-in-files', 'promote-folder', 'referenced', 'media-load', 'media-error', 'open-relative-link'],
+  emits: [
+    'update:content',
+    'update:doc-status',
+    'save',
+    'reload-from-disk',
+    'overwrite-disk',
+    'download',
+    'open-in-files',
+    'promote-folder',
+    'referenced',
+    'media-load',
+    'media-error',
+    'open-relative-link',
+    'media-back',
+    'media-prev',
+    'media-next',
+  ],
   template: `
     <div class="file-canvas-view" :class="'canvas-kind-' + (canvasKind || 'unknown')">
       <!-- Loading / Error states -->
@@ -339,6 +433,7 @@ export default {
               @click="$emit('overwrite-disk')">{{ overwriteDiskLabel }}</button>
           </div>
         </div>
+
         <div v-if="showHeader" class="canvas-toolbar" role="toolbar">
           <div class="canvas-toolbar-group">
             <div class="canvas-segmented" role="group">
@@ -359,12 +454,11 @@ export default {
             </div>
 
             <button
-              v-if="isMarkdown"
+              v-if="isMarkdown && headings.length > 0"
               type="button"
               class="canvas-tool-btn"
               :class="{ active: tocOpen }"
               :aria-pressed="tocOpen"
-              :disabled="headings.length === 0"
               @click="tocOpen = !tocOpen"
               :title="$t('creation.canvas.toc')"
             >
@@ -372,35 +466,41 @@ export default {
               <span class="canvas-badge">{{ headings.length }}</span>
             </button>
 
-            <div class="canvas-font-controls" role="group">
+            <div v-if="creationId" class="canvas-popover-wrap" @click.stop>
               <button
                 type="button"
-                class="canvas-tool-btn canvas-tool-compact"
-                :disabled="docFontSize <= 14"
-                @click="adjustFontSize(-1)"
-                :title="$t('git.zoomOut')"
-              >A−</button>
-              <button
-                type="button"
-                class="canvas-tool-btn canvas-tool-compact"
-                :disabled="docFontSize >= 22"
-                @click="adjustFontSize(1)"
-                :title="$t('git.zoomIn')"
-              >A+</button>
-            </div>
+                class="canvas-status-pill"
+                :class="'is-' + normalizedDocStatus"
+                :aria-expanded="statusMenuOpen"
+                :title="tr('creation.docStatus.label', 'Status')"
+                @click="toggleStatusMenu"
+              >{{ docStatusLabel(normalizedDocStatus) }} ▾</button>
 
-            <span class="canvas-word-count">{{ $t('creation.canvas.wordCount', { count: wordCount }) }}</span>
+              <div v-if="statusMenuOpen" class="canvas-more-menu" role="menu">
+                <button
+                  v-for="st in workflowStatuses"
+                  :key="st"
+                  type="button"
+                  role="menuitem"
+                  class="canvas-tool-btn"
+                  :class="{ active: normalizedDocStatus === st }"
+                  @click="selectDocStatus(st)"
+                >{{ docStatusLabel(st) }}</button>
+              </div>
+            </div>
           </div>
 
           <div class="canvas-toolbar-group canvas-toolbar-right">
             <button
               type="button"
-              class="canvas-tool-btn canvas-ref-btn"
-              @mousedown.prevent
-              @click="referenceDocument"
+              class="canvas-tool-btn canvas-review-trigger"
+              :class="{ active: reviewOpen }"
+              :aria-pressed="reviewOpen"
+              @click="reviewOpen = !reviewOpen"
             >
               <span aria-hidden="true">✦</span>
-              <span>{{ hasActiveDocSelection ? $t('creation.canvas.quoteToSession') : $t('creation.canvas.referenceFile') }}</span>
+              <span>{{ tr('creation.canvas.review', 'Review') }}</span>
+              <span v-if="openAnnotationCount > 0" class="canvas-badge">{{ openAnnotationCount }}</span>
             </button>
 
             <button
@@ -412,24 +512,96 @@ export default {
               :title="$t('common.save') + ' (Ctrl+S)'"
             >{{ $t('common.save') }}</button>
 
-            <button
-              v-if="showOpenInFiles"
-              type="button"
-              class="canvas-tool-btn canvas-tool-icon"
-              @click="$emit('open-in-files')"
-              :title="$t('creation.canvas.openInFiles')"
-              :aria-label="$t('creation.canvas.openInFiles')"
-            >📂</button>
+            <!-- Typography Popover (Aa) -->
+            <div class="canvas-popover-wrap" @click.stop>
+              <button
+                type="button"
+                class="canvas-tool-btn"
+                :class="{ active: typographyOpen }"
+                :aria-expanded="typographyOpen"
+                :title="tr('creation.canvas.typography', 'Typography')"
+                @click="toggleTypographyMenu"
+              >Aa</button>
 
-            <button
-              v-if="showPromoteFolder"
-              type="button"
-              class="canvas-tool-btn canvas-tool-icon"
-              @click="$emit('promote-folder')"
-              :title="$t('creation.canvas.promoteFolder')"
-              :aria-label="$t('creation.canvas.promoteFolder')"
-            >✦</button>
+              <div v-if="typographyOpen" class="canvas-typography-popover" role="dialog" :aria-label="tr('creation.canvas.typography', 'Typography')">
+                <div class="canvas-font-controls" role="group">
+                  <button
+                    type="button"
+                    class="canvas-tool-btn canvas-tool-compact"
+                    :disabled="docFontSize <= 14"
+                    @click="adjustFontSize(-1)"
+                    :title="$t('git.zoomOut')"
+                  >A−</button>
+                  <span class="canvas-zoom-readout">{{ docFontSize }}px</span>
+                  <button
+                    type="button"
+                    class="canvas-tool-btn canvas-tool-compact"
+                    :disabled="docFontSize >= 22"
+                    @click="adjustFontSize(1)"
+                    :title="$t('git.zoomIn')"
+                  >A+</button>
+                </div>
+                <span class="canvas-word-count">{{ $t('creation.canvas.wordCount', { count: wordCount }) }}</span>
+              </div>
+            </div>
+
+            <!-- More Actions Menu (···) -->
+            <div class="canvas-popover-wrap" @click.stop>
+              <button
+                type="button"
+                class="canvas-tool-btn canvas-tool-icon"
+                :class="{ active: moreMenuOpen }"
+                :aria-expanded="moreMenuOpen"
+                :title="tr('creation.canvas.moreActions', 'More actions')"
+                :aria-label="tr('creation.canvas.moreActions', 'More actions')"
+                @click="toggleMoreMenu"
+              >···</button>
+
+              <div v-if="moreMenuOpen" class="canvas-more-menu" role="menu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  class="canvas-tool-btn"
+                  @mousedown.prevent
+                  @click="referenceDocument(); closeAllMenus()"
+                >
+                  <span aria-hidden="true">✦</span>
+                  <span>{{ hasActiveDocSelection ? $t('creation.canvas.quoteToSession') : $t('creation.canvas.referenceFile') }}</span>
+                </button>
+                <button
+                  v-if="showOpenInFiles"
+                  type="button"
+                  role="menuitem"
+                  class="canvas-tool-btn"
+                  @click="$emit('open-in-files'); closeAllMenus()"
+                >{{ $t('creation.canvas.openInFiles') }}</button>
+                <button
+                  v-if="showPromoteFolder"
+                  type="button"
+                  role="menuitem"
+                  class="canvas-tool-btn"
+                  @click="$emit('promote-folder'); closeAllMenus()"
+                >{{ $t('creation.canvas.promoteFolder') }}</button>
+              </div>
+            </div>
           </div>
+        </div>
+
+        <!-- Inline replacement undo toast -->
+        <div v-if="undoSnapshot" class="canvas-undo-toast" role="status" aria-live="polite">
+          <span>{{ undoSnapshot.label }}</span>
+          <button
+            type="button"
+            class="btn-secondary"
+            @click="undoLastReplacement"
+          >{{ tr('creation.canvas.undoReplace', 'Undo') }}</button>
+          <button
+            type="button"
+            class="canvas-tool-btn canvas-tool-icon"
+            :title="$t('common.close')"
+            :aria-label="$t('common.close')"
+            @click="undoSnapshot = null"
+          >×</button>
         </div>
 
         <div class="canvas-doc-layout">
@@ -448,20 +620,27 @@ export default {
             </nav>
           </aside>
 
-          <div class="canvas-doc-scroll" ref="docScrollRef" @scroll="hideSelectionBar">
-            <!-- Floating selection quote bar -->
-            <div
-              v-if="docMode === 'read' && selectionBar.visible"
-              class="canvas-selection-bar"
-              :style="{ top: selectionBar.top + 'px', left: selectionBar.left + 'px' }"
-            >
-              <button
-                type="button"
-                class="canvas-selection-btn"
-                @mousedown.prevent
-                @click="quoteReaderSelection"
-              >✦ {{ $t('creation.canvas.quoteToSession') }}</button>
-            </div>
+          <div class="canvas-doc-scroll" ref="docScrollRef" @scroll="onDocScroll">
+            <!-- Inline Quick Edit & Selection Popover (Read & Edit modes) -->
+            <CanvasInlineEditPopover
+              :visible="activePopoverVisible"
+              :top="activePopoverTop"
+              :left="activePopoverLeft"
+              :selected-text="activePopoverText"
+              :full-content="file.content || ''"
+              :line-start="activePopoverLineStart"
+              :line-end="activePopoverLineEnd"
+              :file-path="reviewFilePath"
+              :file-name="file.name || ''"
+              :agent-id="agentId"
+              :creation-id="creationId"
+              :category="category"
+              :route-key="routeKey"
+              @close="closeSelectionPopover"
+              @apply-replacement="applyInlineReplacement"
+              @quote-to-session="quoteActiveSelection"
+              @quick-review="onQuickReview"
+            />
 
             <!-- Read mode -->
             <article
@@ -497,6 +676,25 @@ export default {
               ></textarea>
             </div>
           </div>
+
+          <!-- Multi-Lens Review Panel -->
+          <CanvasReviewPanel
+            :visible="reviewOpen"
+            :agent-id="agentId"
+            :creation-id="creationId"
+            :file-path="reviewFilePath"
+            :file-name="file.name || ''"
+            :content="file.content || ''"
+            :category="category"
+            :doc-status="normalizedDocStatus"
+            :route-key="routeKey"
+            :quick-review-request="quickReviewRequest"
+            @close="reviewOpen = false"
+            @apply-annotation="applyReviewAnnotation"
+            @jump-to-line="jumpToLine"
+            @send-to-session="sendReviewAnnotationsToSession"
+            @update:doc-status="$emit('update:doc-status', $event)"
+          />
         </div>
       </template>
 
@@ -504,49 +702,40 @@ export default {
       <template v-else-if="canvasKind === 'image'">
         <div v-if="showHeader" class="canvas-toolbar" role="toolbar">
           <div class="canvas-toolbar-group">
+            <div v-if="mediaNav" class="canvas-media-nav-inline">
+              <button
+                type="button"
+                class="canvas-tool-btn canvas-tool-icon"
+                :title="tr('creation.canvas.backToGrid', 'Back to grid')"
+                :aria-label="tr('creation.canvas.backToGrid', 'Back to grid')"
+                @click="$emit('media-back')"
+              >←</button>
+              <span class="canvas-media-nav-name" :title="file.name">{{ file.name }}</span>
+              <span class="canvas-zoom-readout">{{ (mediaNav.index ?? 0) + 1 }} / {{ mediaNav.total ?? 1 }}</span>
+              <button
+                type="button"
+                class="canvas-tool-btn canvas-tool-compact"
+                :disabled="(mediaNav.index ?? 0) <= 0"
+                @click="$emit('media-prev')"
+              >‹</button>
+              <button
+                type="button"
+                class="canvas-tool-btn canvas-tool-compact"
+                :disabled="(mediaNav.index ?? 0) >= (mediaNav.total ?? 1) - 1"
+                @click="$emit('media-next')"
+              >›</button>
+            </div>
+
             <button
+              v-if="imageZoomMode === 'custom'"
               type="button"
-              class="canvas-tool-btn canvas-tool-compact"
-              :disabled="imageZoom <= 0.25"
-              @click="zoomImage(-0.25)"
-              :title="$t('message.zoomOut')"
-            >−</button>
-            <button
-              type="button"
-              class="canvas-tool-btn"
-              :class="{ active: imageZoomMode === 'fit' }"
+              class="canvas-tool-btn canvas-zoom-readout"
+              :title="$t('creation.canvas.fit')"
               @click="setImageFit"
-            >{{ $t('creation.canvas.fit') }}</button>
-            <button
-              type="button"
-              class="canvas-tool-btn"
-              :class="{ active: imageZoomMode === 'custom' && imageZoom === 1 }"
-              @click="setImageActualSize"
-            >{{ $t('creation.canvas.actualSize') }}</button>
-            <button
-              type="button"
-              class="canvas-tool-btn canvas-tool-compact"
-              :disabled="imageZoom >= 4"
-              @click="zoomImage(0.25)"
-              :title="$t('message.zoomIn')"
-            >+</button>
-            <span class="canvas-zoom-readout">{{ imageZoomMode === 'fit' ? $t('creation.canvas.fit') : Math.round(imageZoom * 100) + '%' }}</span>
+            >{{ Math.round(imageZoom * 100) }}%</button>
           </div>
 
           <div class="canvas-toolbar-group canvas-toolbar-right">
-            <button
-              v-if="!isSvgText && file.blobUrl"
-              type="button"
-              class="canvas-tool-btn"
-              @click="openLightbox($event.currentTarget)"
-            >{{ $t('creation.canvas.openLightbox') }}</button>
-
-            <button
-              type="button"
-              class="canvas-tool-btn"
-              @click="$emit('download')"
-            >{{ $t('files.download') }}</button>
-
             <button
               type="button"
               class="canvas-tool-btn canvas-ref-btn"
@@ -556,38 +745,76 @@ export default {
               <span>{{ $t('creation.canvas.referenceFile') }}</span>
             </button>
 
-            <button
-              v-if="showOpenInFiles"
-              type="button"
-              class="canvas-tool-btn canvas-tool-icon"
-              @click="$emit('open-in-files')"
-              :title="$t('creation.canvas.openInFiles')"
-              :aria-label="$t('creation.canvas.openInFiles')"
-            >📂</button>
+            <div class="canvas-popover-wrap" @click.stop>
+              <button
+                type="button"
+                class="canvas-tool-btn canvas-tool-icon"
+                :class="{ active: moreMenuOpen }"
+                :aria-expanded="moreMenuOpen"
+                :title="tr('creation.canvas.moreActions', 'More actions')"
+                :aria-label="tr('creation.canvas.moreActions', 'More actions')"
+                @click="toggleMoreMenu"
+              >···</button>
 
-            <button
-              v-if="showPromoteFolder"
-              type="button"
-              class="canvas-tool-btn canvas-tool-icon"
-              @click="$emit('promote-folder')"
-              :title="$t('creation.canvas.promoteFolder')"
-              :aria-label="$t('creation.canvas.promoteFolder')"
-            >✦</button>
+              <div v-if="moreMenuOpen" class="canvas-more-menu" role="menu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  class="canvas-tool-btn"
+                  :class="{ active: imageZoomMode === 'fit' }"
+                  @click="setImageFit(); closeAllMenus()"
+                >{{ $t('creation.canvas.fit') }}</button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  class="canvas-tool-btn"
+                  :class="{ active: imageZoomMode === 'custom' && imageZoom === 1 }"
+                  @click="setImageActualSize(); closeAllMenus()"
+                >{{ $t('creation.canvas.actualSize') }}</button>
+                <button
+                  v-if="!isSvgText && file.blobUrl"
+                  type="button"
+                  role="menuitem"
+                  class="canvas-tool-btn"
+                  @click="openLightbox($event.currentTarget); closeAllMenus()"
+                >{{ $t('creation.canvas.openLightbox') }}</button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  class="canvas-tool-btn"
+                  @click="$emit('download'); closeAllMenus()"
+                >{{ $t('files.download') }}</button>
+                <button
+                  v-if="showOpenInFiles"
+                  type="button"
+                  role="menuitem"
+                  class="canvas-tool-btn"
+                  @click="$emit('open-in-files'); closeAllMenus()"
+                >{{ $t('creation.canvas.openInFiles') }}</button>
+                <button
+                  v-if="showPromoteFolder"
+                  type="button"
+                  role="menuitem"
+                  class="canvas-tool-btn"
+                  @click="$emit('promote-folder'); closeAllMenus()"
+                >{{ $t('creation.canvas.promoteFolder') }}</button>
+              </div>
+            </div>
           </div>
         </div>
 
-        <div class="canvas-image-stage">
+        <div class="canvas-image-stage" @wheel="onImageWheel">
           <div v-if="file.previewError" class="canvas-state canvas-state-error" role="alert">
             <span>{{ file.previewError }}</span>
           </div>
-          <div v-else-if="isSvgText" class="canvas-image-svg-wrap" :style="svgZoomStyle">
+          <div v-else-if="isSvgText" class="canvas-image-svg-wrap" :style="svgZoomStyle" @dblclick="toggleImageFitActual">
             <SvgPreview :key="file.path" :content="file.content || ''" :name="file.name" />
           </div>
           <div v-else-if="!file.blobUrl" class="canvas-state" role="status">
             <span class="spinner-mini" aria-hidden="true"></span>
             <span>{{ $t('files.loadingPreview') }}</span>
           </div>
-          <div v-else class="canvas-image-viewport" :class="{ 'is-fit': imageZoomMode === 'fit' }">
+          <div v-else class="canvas-image-viewport" :class="{ 'is-fit': imageZoomMode === 'fit' }" @dblclick="toggleImageFitActual">
             <div v-if="file.previewLoading" class="canvas-media-loading-overlay" role="status" aria-live="polite">
               <span class="spinner-mini" aria-hidden="true"></span>
               <span>{{ $t('files.loadingPreview') }}</span>
@@ -613,27 +840,38 @@ export default {
       <template v-else-if="canvasKind === 'video'">
         <div v-if="showHeader" class="canvas-toolbar" role="toolbar">
           <div class="canvas-toolbar-group">
-            <label class="canvas-rate-wrap">
-              <select
-                class="canvas-rate-select"
-                :value="playbackRate"
-                @change="setPlaybackRate(Number($event.target.value))"
-                :aria-label="$t('creation.canvas.speed')"
-              >
-                <option v-for="rate in PLAYBACK_RATES" :key="rate" :value="rate">{{ rate }}x</option>
-              </select>
-            </label>
+            <div v-if="mediaNav" class="canvas-media-nav-inline">
+              <button
+                type="button"
+                class="canvas-tool-btn canvas-tool-icon"
+                :title="tr('creation.canvas.backToGrid', 'Back to grid')"
+                :aria-label="tr('creation.canvas.backToGrid', 'Back to grid')"
+                @click="$emit('media-back')"
+              >←</button>
+              <span class="canvas-media-nav-name" :title="file.name">{{ file.name }}</span>
+              <span class="canvas-zoom-readout">{{ (mediaNav.index ?? 0) + 1 }} / {{ mediaNav.total ?? 1 }}</span>
+              <button
+                type="button"
+                class="canvas-tool-btn canvas-tool-compact"
+                :disabled="(mediaNav.index ?? 0) <= 0"
+                @click="$emit('media-prev')"
+              >‹</button>
+              <button
+                type="button"
+                class="canvas-tool-btn canvas-tool-compact"
+                :disabled="(mediaNav.index ?? 0) >= (mediaNav.total ?? 1) - 1"
+                @click="$emit('media-next')"
+              >›</button>
+            </div>
+          </div>
 
-            <span class="canvas-timecode">{{ currentTimeLabel }} / {{ durationLabel }}</span>
-
+          <div class="canvas-toolbar-group canvas-toolbar-right">
             <button
               type="button"
               class="canvas-tool-btn"
               @click="addVideoMarker"
             >+ {{ $t('creation.canvas.addBookmark') }}</button>
-          </div>
 
-          <div class="canvas-toolbar-group canvas-toolbar-right">
             <button
               type="button"
               class="canvas-tool-btn canvas-ref-btn"
@@ -643,29 +881,40 @@ export default {
               <span>{{ $t('creation.canvas.referenceAtTime') }} @ {{ currentTimeLabel }}</span>
             </button>
 
-            <button
-              type="button"
-              class="canvas-tool-btn"
-              @click="$emit('download')"
-            >{{ $t('files.download') }}</button>
+            <div class="canvas-popover-wrap" @click.stop>
+              <button
+                type="button"
+                class="canvas-tool-btn canvas-tool-icon"
+                :class="{ active: moreMenuOpen }"
+                :aria-expanded="moreMenuOpen"
+                :title="tr('creation.canvas.moreActions', 'More actions')"
+                :aria-label="tr('creation.canvas.moreActions', 'More actions')"
+                @click="toggleMoreMenu"
+              >···</button>
 
-            <button
-              v-if="showOpenInFiles"
-              type="button"
-              class="canvas-tool-btn canvas-tool-icon"
-              @click="$emit('open-in-files')"
-              :title="$t('creation.canvas.openInFiles')"
-              :aria-label="$t('creation.canvas.openInFiles')"
-            >📂</button>
-
-            <button
-              v-if="showPromoteFolder"
-              type="button"
-              class="canvas-tool-btn canvas-tool-icon"
-              @click="$emit('promote-folder')"
-              :title="$t('creation.canvas.promoteFolder')"
-              :aria-label="$t('creation.canvas.promoteFolder')"
-            >✦</button>
+              <div v-if="moreMenuOpen" class="canvas-more-menu" role="menu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  class="canvas-tool-btn"
+                  @click="$emit('download'); closeAllMenus()"
+                >{{ $t('files.download') }}</button>
+                <button
+                  v-if="showOpenInFiles"
+                  type="button"
+                  role="menuitem"
+                  class="canvas-tool-btn"
+                  @click="$emit('open-in-files'); closeAllMenus()"
+                >{{ $t('creation.canvas.openInFiles') }}</button>
+                <button
+                  v-if="showPromoteFolder"
+                  type="button"
+                  role="menuitem"
+                  class="canvas-tool-btn"
+                  @click="$emit('promote-folder'); closeAllMenus()"
+                >{{ $t('creation.canvas.promoteFolder') }}</button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -739,6 +988,31 @@ export default {
   `,
   setup(props, { emit }) {
     const t = Vue.inject('t', key => key);
+    const tr = (key, fallback, params) => {
+      const translated = typeof t === 'function' ? t(key, params) : key;
+      if (translated && translated !== key) return translated;
+      let text = fallback ?? key;
+      if (params && typeof text === 'string') {
+        for (const [k, v] of Object.entries(params)) {
+          text = text.replace(new RegExp(`\\{${k}\\}`, 'g'), String(v));
+        }
+      }
+      return text;
+    };
+
+    const creationsStore = useSafeCreationsStore();
+    const workflowStatuses = Array.isArray(DOC_WORKFLOW_STATUSES) && DOC_WORKFLOW_STATUSES.length > 0
+      ? DOC_WORKFLOW_STATUSES
+      : FALLBACK_DOC_STATUSES;
+    const normalizedDocStatus = Vue.computed(() => (
+      workflowStatuses.includes(props.docStatus) ? props.docStatus : 'draft'
+    ));
+    const docStatusLabel = (status) => {
+      if (status === 'final') return tr('creation.docStatus.final', 'Final');
+      if (status === 'review') return tr('creation.docStatus.review', 'In Review');
+      return tr('creation.docStatus.draft', 'Draft');
+    };
+
     const isChinese = Vue.computed(() => getLocale() === 'zh-CN');
     const diskConflictMessage = Vue.computed(() => isChinese.value
       ? '磁盘上的文件在你开始编辑后发生了变化。重新加载会丢弃草稿，覆盖则会替换磁盘上的版本。'
@@ -755,15 +1029,100 @@ export default {
       && (!props.file?.fileType || props.file.fileType === 'text')
     ));
 
+    // --- Toolbar Popover / Menu state ---
+    const statusMenuOpen = Vue.ref(false);
+    const typographyOpen = Vue.ref(false);
+    const moreMenuOpen = Vue.ref(false);
+
+    const closeAllMenus = () => {
+      statusMenuOpen.value = false;
+      typographyOpen.value = false;
+      moreMenuOpen.value = false;
+    };
+
+    const toggleStatusMenu = () => {
+      const next = !statusMenuOpen.value;
+      closeAllMenus();
+      statusMenuOpen.value = next;
+    };
+
+    const toggleTypographyMenu = () => {
+      const next = !typographyOpen.value;
+      closeAllMenus();
+      typographyOpen.value = next;
+    };
+
+    const toggleMoreMenu = () => {
+      const next = !moreMenuOpen.value;
+      closeAllMenus();
+      moreMenuOpen.value = next;
+    };
+
+    const selectDocStatus = (status) => {
+      closeAllMenus();
+      if (status && status !== normalizedDocStatus.value) {
+        emit('update:doc-status', status);
+      }
+    };
+
+    const onDocumentClick = () => {
+      closeAllMenus();
+    };
+
+    const onDocumentKeydown = (e) => {
+      if (e.key === 'Escape') {
+        closeAllMenus();
+      }
+    };
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('click', onDocumentClick);
+      document.addEventListener('keydown', onDocumentKeydown);
+    }
+
     // --- Document state ---
     const docMode = Vue.ref('read');
     const tocOpen = Vue.ref(false);
+    const reviewOpen = Vue.ref(false);
+    const quickReviewRequest = Vue.ref(null);
+    const undoSnapshot = Vue.ref(null);
     const docFontSize = Vue.ref(16);
     const docScrollRef = Vue.ref(null);
     const readerContentRef = Vue.ref(null);
     const editorRef = Vue.ref(null);
-    const selectionBar = Vue.reactive({ visible: false, top: 0, left: 0, text: '' });
-    const editorSelection = Vue.reactive({ text: '', lineStart: undefined, lineEnd: undefined });
+    const selectionBar = Vue.reactive({
+      visible: false,
+      top: 0,
+      left: 0,
+      text: '',
+      lineStart: undefined,
+      lineEnd: undefined,
+    });
+    const editorSelection = Vue.reactive({
+      visible: false,
+      top: 12,
+      left: 16,
+      text: '',
+      lineStart: undefined,
+      lineEnd: undefined,
+    });
+
+    const reviewFilePath = Vue.computed(() => props.file?.relPath || props.file?.path || '');
+
+    const openAnnotationCount = Vue.computed(() => {
+      if (!props.agentId || !props.creationId || !reviewFilePath.value) return 0;
+      if (typeof creationsStore?.getDocReview === 'function') {
+        const review = creationsStore.getDocReview(props.agentId, props.creationId, reviewFilePath.value);
+        if (review && Array.isArray(review.annotations)) {
+          return review.annotations.filter(a => (a.status || 'open') === 'open').length;
+        }
+      }
+      if (typeof creationsStore?.getDocState === 'function') {
+        const state = creationsStore.getDocState(props.agentId, props.creationId, reviewFilePath.value);
+        if (state && typeof state.openReviewCount === 'number') return state.openReviewCount;
+      }
+      return 0;
+    });
 
     const wordCount = Vue.computed(() => countWords(props.file?.content || ''));
     const headings = Vue.computed(() => (
@@ -825,15 +1184,33 @@ export default {
     const hideSelectionBar = () => {
       selectionBar.visible = false;
       selectionBar.text = '';
+      selectionBar.lineStart = undefined;
+      selectionBar.lineEnd = undefined;
+    };
+
+    const hideEditorSelection = () => {
+      editorSelection.visible = false;
+      editorSelection.text = '';
+      editorSelection.lineStart = undefined;
+      editorSelection.lineEnd = undefined;
+    };
+
+    const closeSelectionPopover = () => {
+      hideSelectionBar();
+      editorSelection.visible = false;
+    };
+
+    const onDocScroll = () => {
+      if (docMode.value === 'read') {
+        hideSelectionBar();
+      }
     };
 
     const setDocMode = (mode) => {
       if (binaryDocument.value) return;
       docMode.value = mode;
       hideSelectionBar();
-      editorSelection.text = '';
-      editorSelection.lineStart = undefined;
-      editorSelection.lineEnd = undefined;
+      hideEditorSelection();
       if (mode === 'edit') {
         Vue.nextTick(() => editorRef.value?.focus());
       }
@@ -868,6 +1245,48 @@ export default {
       }
     };
 
+    const jumpToLine = (lineNumber) => {
+      const targetLine = Number(lineNumber);
+      if (!Number.isFinite(targetLine) || targetLine < 1) return;
+      const lines = String(props.file?.content || '').split(/\r?\n/);
+      const targetLineIdx = Math.max(0, Math.min(lines.length - 1, Math.floor(targetLine) - 1));
+
+      if (docMode.value === 'edit') {
+        const textarea = editorRef.value;
+        if (!textarea) return;
+        let offset = 0;
+        for (let i = 0; i < targetLineIdx; i += 1) {
+          offset += lines[i].length + 1;
+        }
+        textarea.focus();
+        textarea.setSelectionRange(offset, offset + (lines[targetLineIdx]?.length || 0));
+        const approxLineHeight = docFontSize.value * 1.75;
+        if (docScrollRef.value) {
+          docScrollRef.value.scrollTop = Math.max(0, targetLineIdx * approxLineHeight - 48);
+        }
+        return;
+      }
+
+      const scrollEl = docScrollRef.value;
+      const container = readerContentRef.value;
+      if (!scrollEl || !container) return;
+      const probe = (lines[targetLineIdx] || '').replace(/^[#>*\-\d.\s]+/, '').trim().slice(0, 48);
+      if (probe) {
+        const blocks = container.querySelectorAll('p, li, h1, h2, h3, h4, blockquote, pre');
+        for (const block of blocks) {
+          if ((block.textContent || '').includes(probe)) {
+            block.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            return;
+          }
+        }
+      }
+      const ratio = lines.length > 1 ? targetLineIdx / (lines.length - 1) : 0;
+      scrollEl.scrollTo?.({
+        top: Math.max(0, ratio * Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight)),
+        behavior: 'smooth',
+      });
+    };
+
     const onReaderSelectionChange = () => {
       if (docMode.value !== 'read') return;
       const sel = typeof window !== 'undefined' ? window.getSelection?.() : null;
@@ -892,12 +1311,15 @@ export default {
         const range = sel.getRangeAt(0);
         const rect = range.getBoundingClientRect();
         const scrollRect = scrollEl.getBoundingClientRect();
-        const top = Math.max(8, rect.top - scrollRect.top + scrollEl.scrollTop - 40);
+        const top = Math.max(8, rect.top - scrollRect.top + scrollEl.scrollTop - 44);
         const centerX = rect.left - scrollRect.left + rect.width / 2;
-        const left = Math.max(16, Math.min(scrollRect.width - 180, centerX - 72));
+        const left = Math.max(12, Math.min(Math.max(12, scrollRect.width - 340), centerX - 160));
+        const { lineStart, lineEnd } = findLineRangeForSnippet(props.file?.content || '', text);
         selectionBar.top = top;
         selectionBar.left = left;
         selectionBar.text = text;
+        selectionBar.lineStart = lineStart;
+        selectionBar.lineEnd = lineEnd;
         selectionBar.visible = true;
       } catch {
         hideSelectionBar();
@@ -907,7 +1329,9 @@ export default {
     const quoteReaderSelection = () => {
       const snippet = selectionBar.text.trim();
       if (!snippet) return;
-      const { lineStart, lineEnd } = findLineRangeForSnippet(props.file?.content || '', snippet);
+      const { lineStart, lineEnd } = selectionBar.lineStart
+        ? { lineStart: selectionBar.lineStart, lineEnd: selectionBar.lineEnd }
+        : findLineRangeForSnippet(props.file?.content || '', snippet);
       const ref = addCanvasContextRef(props.routeKey, {
         kind: 'doc',
         filePath: props.file?.path || '',
@@ -921,6 +1345,25 @@ export default {
       }
       hideSelectionBar();
       emit('referenced', ref);
+    };
+
+    const quoteActiveSelection = () => {
+      if (docMode.value === 'read' && selectionBar.visible && selectionBar.text) {
+        quoteReaderSelection();
+        return;
+      }
+      if (docMode.value === 'edit' && editorSelection.text) {
+        const ref = addCanvasContextRef(props.routeKey, {
+          kind: 'doc',
+          filePath: props.file?.path || '',
+          fileName: props.file?.name || '',
+          snippet: editorSelection.text,
+          lineStart: editorSelection.lineStart,
+          lineEnd: editorSelection.lineEnd,
+        });
+        editorSelection.visible = false;
+        emit('referenced', ref);
+      }
     };
 
     const onEditorInput = (event) => {
@@ -941,29 +1384,118 @@ export default {
       const start = textarea.selectionStart ?? 0;
       const end = textarea.selectionEnd ?? 0;
       if (end <= start) {
-        editorSelection.text = '';
-        editorSelection.lineStart = undefined;
-        editorSelection.lineEnd = undefined;
+        hideEditorSelection();
         return;
       }
       const content = props.file?.content || '';
       const text = content.slice(start, end).trim();
       if (!text) {
-        editorSelection.text = '';
-        editorSelection.lineStart = undefined;
-        editorSelection.lineEnd = undefined;
+        hideEditorSelection();
         return;
       }
       const { lineStart, lineEnd } = lineRangeFromOffsets(content, start, end);
+      const scrollEl = docScrollRef.value;
+      const scrollTop = scrollEl?.scrollTop || 0;
+      const width = scrollEl?.clientWidth || 420;
       editorSelection.text = text;
       editorSelection.lineStart = lineStart;
       editorSelection.lineEnd = lineEnd;
+      editorSelection.top = scrollTop + 12;
+      editorSelection.left = Math.max(12, Math.min(Math.max(12, width - 360), (width - 340) / 2));
+      editorSelection.visible = true;
     };
+
+    const activePopoverVisible = Vue.computed(() => (
+      (docMode.value === 'read' && selectionBar.visible && !!selectionBar.text)
+      || (docMode.value === 'edit' && editorSelection.visible && !!editorSelection.text)
+    ));
+    const activePopoverTop = Vue.computed(() => (
+      docMode.value === 'read' ? selectionBar.top : editorSelection.top
+    ));
+    const activePopoverLeft = Vue.computed(() => (
+      docMode.value === 'read' ? selectionBar.left : editorSelection.left
+    ));
+    const activePopoverText = Vue.computed(() => (
+      docMode.value === 'read' ? selectionBar.text : editorSelection.text
+    ));
+    const activePopoverLineStart = Vue.computed(() => (
+      docMode.value === 'read' ? selectionBar.lineStart : editorSelection.lineStart
+    ));
+    const activePopoverLineEnd = Vue.computed(() => (
+      docMode.value === 'read' ? selectionBar.lineEnd : editorSelection.lineEnd
+    ));
 
     const hasActiveDocSelection = Vue.computed(() => (
       (docMode.value === 'read' && selectionBar.visible && !!selectionBar.text)
       || (docMode.value === 'edit' && !!editorSelection.text)
     ));
+
+    const applyContentMutation = (originalText, revisedText, lineStart, lineEnd) => {
+      if (binaryDocument.value) return;
+      const prevContent = props.file?.content || '';
+      const nextContent = applyTextReplacement(prevContent, originalText, revisedText, lineStart, lineEnd);
+      if (nextContent !== prevContent) {
+        undoSnapshot.value = {
+          prevContent,
+          label: tr('creation.canvas.replacedNotice', 'Passage replaced'),
+        };
+        emit('update:content', nextContent);
+      }
+    };
+
+    const applyInlineReplacement = (payload) => {
+      if (!payload) return;
+      applyContentMutation(payload.originalText, payload.revisedText, payload.lineStart, payload.lineEnd);
+      if (typeof window !== 'undefined') {
+        window.getSelection?.()?.removeAllRanges?.();
+      }
+      hideSelectionBar();
+      hideEditorSelection();
+    };
+
+    const applyReviewAnnotation = (ann) => {
+      if (!ann || !ann.suggestedReplacement) return;
+      applyContentMutation(ann.quote || '', ann.suggestedReplacement, ann.lineStart, ann.lineEnd);
+    };
+
+    const undoLastReplacement = () => {
+      if (!undoSnapshot.value) return;
+      const prevContent = undoSnapshot.value.prevContent;
+      undoSnapshot.value = null;
+      emit('update:content', prevContent);
+    };
+
+    const onQuickReview = (payload) => {
+      if (!payload || !payload.selectedText) return;
+      reviewOpen.value = true;
+      quickReviewRequest.value = {
+        nonce: Date.now() + Math.random(),
+        lensId: payload.lensId,
+        selectedText: payload.selectedText,
+        lineStart: payload.lineStart,
+        lineEnd: payload.lineEnd,
+      };
+      hideSelectionBar();
+      editorSelection.visible = false;
+    };
+
+    const sendReviewAnnotationsToSession = (selectedAnnotations) => {
+      if (!Array.isArray(selectedAnnotations) || selectedAnnotations.length === 0) return;
+      const lines = selectedAnnotations.map((ann, idx) => {
+        const loc = ann.lineStart ? `[L${ann.lineStart}] ` : '';
+        const title = ann.title ? `${ann.title}: ` : '';
+        const detail = ann.comment || ann.quote || '';
+        return `${idx + 1}. ${loc}${title}${detail}`.trim();
+      });
+      const snippet = lines.join('\n');
+      const ref = addCanvasContextRef(props.routeKey, {
+        kind: 'doc',
+        filePath: props.file?.path || '',
+        fileName: props.file?.name || '',
+        snippet,
+      });
+      emit('referenced', ref);
+    };
 
     const referenceDocument = () => {
       if (docMode.value === 'read' && selectionBar.visible && selectionBar.text) {
@@ -1010,9 +1542,24 @@ export default {
       imageZoom.value = 1;
     };
 
+    const toggleImageFitActual = () => {
+      if (imageZoomMode.value === 'fit') {
+        setImageActualSize();
+      } else {
+        setImageFit();
+      }
+    };
+
     const zoomImage = (delta) => {
       imageZoomMode.value = 'custom';
       imageZoom.value = Math.max(0.25, Math.min(4, Math.round((imageZoom.value + delta) * 100) / 100));
+    };
+
+    const onImageWheel = (event) => {
+      if (!event || (!event.ctrlKey && !event.metaKey)) return;
+      event.preventDefault();
+      const delta = event.deltaY < 0 ? 0.15 : -0.15;
+      zoomImage(delta);
     };
 
     const imageZoomStyle = Vue.computed(() => (
@@ -1156,10 +1703,11 @@ export default {
 
     // Reset per-file ephemeral UI state when switching files
     Vue.watch(() => props.file?.path, () => {
+      closeAllMenus();
       hideSelectionBar();
-      editorSelection.text = '';
-      editorSelection.lineStart = undefined;
-      editorSelection.lineEnd = undefined;
+      hideEditorSelection();
+      undoSnapshot.value = null;
+      quickReviewRequest.value = null;
       setImageFit();
       closeLightbox();
       currentTime.value = 0;
@@ -1167,11 +1715,22 @@ export default {
       videoMarkers.value = [];
     });
 
-    Vue.onBeforeUnmount(closeLightbox);
+    const cleanup = () => {
+      closeLightbox();
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('click', onDocumentClick);
+        document.removeEventListener('keydown', onDocumentKeydown);
+      }
+    };
+
+    Vue.onBeforeUnmount(cleanup);
     Vue.onDeactivated?.(closeLightbox);
 
     return {
-      PLAYBACK_RATES,
+      tr,
+      workflowStatuses,
+      normalizedDocStatus,
+      docStatusLabel,
       canvasKind,
       binaryDocument,
       binaryDraftWarning,
@@ -1181,14 +1740,34 @@ export default {
       saveBlocked,
       isMarkdown,
       isSvgText,
+      // Menus
+      statusMenuOpen,
+      typographyOpen,
+      moreMenuOpen,
+      closeAllMenus,
+      toggleStatusMenu,
+      toggleTypographyMenu,
+      toggleMoreMenu,
+      selectDocStatus,
       // Document
       docMode,
       tocOpen,
+      reviewOpen,
+      reviewFilePath,
+      quickReviewRequest,
+      undoSnapshot,
+      openAnnotationCount,
       docFontSize,
       docScrollRef,
       readerContentRef,
       editorRef,
       selectionBar,
+      activePopoverVisible,
+      activePopoverTop,
+      activePopoverLeft,
+      activePopoverText,
+      activePopoverLineStart,
+      activePopoverLineEnd,
       wordCount,
       headings,
       sanitizedDocHtml,
@@ -1197,12 +1776,21 @@ export default {
       setDocMode,
       adjustFontSize,
       jumpToHeading,
+      jumpToLine,
       hideSelectionBar,
+      closeSelectionPopover,
+      onDocScroll,
       onReaderSelectionChange,
       quoteReaderSelection,
+      quoteActiveSelection,
       onEditorInput,
       onEditorKeydown,
       onEditorSelectionChange,
+      applyInlineReplacement,
+      applyReviewAnnotation,
+      undoLastReplacement,
+      onQuickReview,
+      sendReviewAnnotationsToSession,
       referenceDocument,
       // Image
       imageZoomMode,
@@ -1211,7 +1799,9 @@ export default {
       svgZoomStyle,
       setImageFit,
       setImageActualSize,
+      toggleImageFitActual,
       zoomImage,
+      onImageWheel,
       openLightbox,
       onImageLoad,
       onImageError,

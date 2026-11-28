@@ -51,3 +51,5 @@ export function decodeBase64(value, max) {
   if (bytes.length > max) fail('LIMIT_EXCEEDED', 'Payload is too large');
   return bytes;
 }
+
+export { CREATION_CATEGORIES, DEFAULT_KIND_BY_CATEGORY, DOC_WORKFLOW_STATUSES, inferCategoryFromKind, normalizeCategory } from './categories.js';

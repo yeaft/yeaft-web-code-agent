@@ -6,3 +6,5 @@ export { buildCreationToolRegistry } from './tools.js';
 export { CreationRunner, createCreationRunner } from './runner.js';
 export { createCreationService } from './service.js';
 export { createCreationBridge, handleCreationRequest, handleCreationMediaRead, shutdownCreations } from './bridge.js';
+export * from './categories.js';
+export * from './ai-assistant.js';

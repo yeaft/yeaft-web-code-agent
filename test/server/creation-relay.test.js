@@ -37,7 +37,7 @@ import { CONFIG } from '../../server/config.js';
 import { activeSessions, revokedSessions, revokedTokens } from '../../server/auth/session-store.js';
 import { issueSessionToken, logout, maybeRenewToken, verifyToken } from '../../server/auth/token.js';
 import { handleWebConnection } from '../../server/ws-client.js';
-import { createCreationRelay } from '../../server/handlers/client-creation.js';
+import { createCreationRelay, getClientRelayId } from '../../server/handlers/client-creation.js';
 import { createWorkbenchPreview, openWorkbenchVideo, readWorkbenchPreview } from '../../server/workbench-preview.js';
 import { handleClientWorkbench } from '../../server/handlers/client-workbench.js';
 import { __testResetWorkbenchCorrelations, peekWorkbenchRequest } from '../../server/workbench-correlation.js';
@@ -485,8 +485,8 @@ describe('Creation WebSocket relay', () => {
   });
 
   it('authorizes the owner, replaces the correlation ID and does not trust browser identity', async () => {
-    await relay.request(client, msg({ ownerId: 'spoofed', payload: { creationId: 'creation-a' } }));
-    expect(frame(agent)).toEqual({ type: 'creation_request', requestId: expect.stringMatching(/^[0-9a-f-]{36}$/), op: 'get_creation', ownerId: 'user-a', payload: { creationId: 'creation-a' } });
+    await relay.request(client, msg({ ownerId: 'spoofed', targetClientId: getClientRelayId(peer), payload: { creationId: 'creation-a' } }));
+    expect(frame(agent)).toEqual({ type: 'creation_request', requestId: expect.stringMatching(/^[0-9a-f-]{36}$/), op: 'get_creation', ownerId: 'user-a', targetClientId: getClientRelayId(client), payload: { creationId: 'creation-a' } });
     expect(frame(agent).requestId).not.toBe('browser-1');
   });
 
@@ -568,6 +568,32 @@ describe('Creation WebSocket relay', () => {
     await vi.advanceTimersByTimeAsync(45_000);
     expect(client.ws.send).toHaveBeenCalledTimes(1);
     expect(frame(client)).toMatchObject({ errorCode: code });
+  });
+
+  it.each(['inline_edit', 'review_document', 'cancel_ai_job', 'get_doc_states', 'set_doc_state', 'get_doc_review', 'update_review_annotation'])('relays %s with a server-controlled client ID and existing ACL', async op => {
+    await relay.request(other, msg({ op }));
+    expect(frame(other)).toMatchObject({ op, errorCode: 'forbidden' });
+    expect(agent.ws.send).not.toHaveBeenCalled();
+    await relay.request(client, msg({ op, targetClientId: 'forged' }));
+    expect(frame(agent)).toMatchObject({ op, ownerId: 'user-a', targetClientId: getClientRelayId(client) });
+    expect(getClientRelayId(client)).not.toBe(getClientRelayId(peer));
+  });
+
+  it('delivers targeted events to one socket only, including in skip-auth mode, without leaking routing metadata', async () => {
+    const event = { type: 'inline_edit_delta', delta: 'private' };
+    const envelope = { type: 'creation_event', ownerId: 'user-a', targetClientId: getClientRelayId(client), event };
+    await handleAgentCreation(agentId, agent, { ...envelope, ownerId: 'mismatched' });
+    expect(client.ws.send).not.toHaveBeenCalled();
+    await handleAgentCreation(agentId, agent, envelope);
+    expect(frame(client)).toEqual({ type: 'creation_event', agentId, event });
+    const prior = CONFIG.skipAuth;
+    try {
+      CONFIG.skipAuth = true;
+      await handleAgentCreation(agentId, agent, envelope);
+    } finally { CONFIG.skipAuth = prior; }
+    expect(client.ws.send).toHaveBeenCalledTimes(2);
+    expect(peer.ws.send).not.toHaveBeenCalled();
+    expect(other.ws.send).not.toHaveBeenCalled();
   });
 
   it('broadcasts events with the server-derived ID only to authorized browsers', async () => {

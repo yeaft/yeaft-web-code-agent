@@ -78,7 +78,10 @@ export function createCreationBridge({ context = ctx, send = sendToServer,
       emitEvent: event => {
         const eventSocket = scope.socket;
         const isCurrentEvent = () => scopes.get(ownerId) === scope && isCurrent(current, eventSocket);
-        if (isCurrentEvent()) return send({ type: 'creation_event', ownerId, event }, { isCurrent: isCurrentEvent });
+        if (isCurrentEvent()) {
+          const { _targetClientId: targetClientId, ...body } = event;
+          return send({ type: 'creation_event', ownerId, ...(targetClientId ? { targetClientId } : {}), event: body }, { isCurrent: isCurrentEvent });
+        }
       },
       mediaUrlFor: (creationId, mediaKind, mediaId) =>
         `/api/yeaft/creations/${encodeURIComponent(agentId)}/${safeId(creationId)}/media/${mediaKind}/${safeId(mediaId)}`,
@@ -135,7 +138,8 @@ export function createCreationBridge({ context = ctx, send = sendToServer,
         response.data = await serialize(async () => {
           const runtime = await serviceForOwner(current, socket);
           if (closed) fail('INVALID_STATE', 'Creations is closed');
-          return runtime.request({ op: response.op, payload: msg.payload ?? {} });
+          return runtime.request({ op: response.op, payload: msg.payload ?? {},
+            meta: { targetClientId: typeof msg.targetClientId === 'string' ? msg.targetClientId : undefined } });
         });
         response.ok = true;
       } catch (error) { Object.assign(response, { ok: false, ...safeError(error) }); }

@@ -5,12 +5,21 @@ import { DatabaseSync } from 'node:sqlite';
 import { writeAtomic } from '../storage/atomic.js';
 import {
   CREATION_KINDS, MODALITIES, MODALITY_BY_KIND, CREATION_STATUSES, CANON_TYPES, NODE_STATUSES, PROPOSAL_STATUSES, RUN_STATUSES,
+  DEFAULT_KIND_BY_CATEGORY, DOC_WORKFLOW_STATUSES, inferCategoryFromKind, normalizeCategory,
   LIMITS, boundedText, decodeBase64, defaultCelestialPlacement, fail, safeId,
 } from './constants.js';
 import { parseSource, searchTerms, sniffSourceMimeType } from './source-parser.js';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS creations (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS creation_doc_states (
+  creation_id TEXT NOT NULL REFERENCES creations ON DELETE CASCADE,
+  file_path TEXT NOT NULL, status TEXT NOT NULL, updated_at TEXT NOT NULL,
+  PRIMARY KEY (creation_id, file_path));
+CREATE TABLE IF NOT EXISTS creation_doc_reviews (
+  creation_id TEXT NOT NULL REFERENCES creations ON DELETE CASCADE,
+  file_path TEXT NOT NULL, updated_at TEXT NOT NULL, data TEXT NOT NULL,
+  PRIMARY KEY (creation_id, file_path));
 -- External and ambiguous folder history is retained independently of the Creation.
 -- A freshly generated workspace has a recorded directory identity instead.
 CREATE TABLE IF NOT EXISTS protected_workspaces (root_dir TEXT PRIMARY KEY NOT NULL);
@@ -112,6 +121,17 @@ const own = (obj, key) => Object.hasOwn(obj, key);
 export function boundedList(value, max, name) {
   if (!Array.isArray(value) || value.length > max) fail('INVALID_REQUEST', `Invalid ${name}`);
   return value;
+}
+
+export function normalizeDocFilePath(filePath) {
+  boundedText(filePath, 1024, 'document file path', { required: true });
+  if (!filePath.isWellFormed() || /\p{Cc}/u.test(filePath)) fail('INVALID_REQUEST', 'Invalid document file path');
+  const path = filePath.replaceAll('\\', '/').replace(/^(?:\/|\.\/)+/, '');
+  const segments = path.split('/');
+  if (segments.some(segment => !segment || segment === '.' || segment === '..') || /^[a-z]:/i.test(path)) {
+    fail('INVALID_REQUEST', 'Invalid document file path');
+  }
+  return path;
 }
 
 function contains(root, path) {
@@ -521,7 +541,7 @@ export class CreationStore {
     const active = data(this.one(`SELECT data FROM creation_runs WHERE creation_id=? AND status IN ('running','paused')
       ORDER BY status='running' DESC,rowid DESC LIMIT 1`, row.id));
     const { ownsWorkspace, workspaceIdentity, boundRootIdentity, pendingBindTarget, pendingBindIdentity, ...rec } = data(row);
-    return { ...rec, sessionId: rec.sessionId ?? null, projectId: rec.projectId ?? null, rootDir: rec.rootDir ?? null,
+    return { ...rec, category: rec.category ?? inferCategoryFromKind(rec.kind), sessionId: rec.sessionId ?? null, projectId: rec.projectId ?? null, rootDir: rec.rootDir ?? null,
       summary: rec.description || rec.mission || '', celestial: rec.placement, updatedAt: row.updated_at, ...counts, ...totals, hasReadableContent: counts.readableUnitCount > 0,
       activeRunStatus: active?.status ?? null, activeRunProgress: active?.progress?.total > 0 ? active.progress.completed / active.progress.total : null };
   }
@@ -561,7 +581,8 @@ export class CreationStore {
         fail('INVALID_REQUEST', 'Invalid initializeFolder');
       }
       const id = idFor(input.id);
-      const kind = pick(input.kind ?? 'book', CREATION_KINDS, 'creation kind');
+      const category = normalizeCategory(input.category, input.kind);
+      const kind = pick(input.kind ?? DEFAULT_KIND_BY_CATEGORY[category], CREATION_KINDS, 'creation kind');
       const modality = input.modality ?? MODALITY_BY_KIND[kind];
       if (modality !== MODALITY_BY_KIND[kind]) fail('INVALID_REQUEST', 'Modality does not match creation kind');
       const cache = this.#cachePath(id);
@@ -570,7 +591,7 @@ export class CreationStore {
       }
       const index = this.one('SELECT COUNT(*) AS count FROM creations').count;
       const createdAt = now();
-      const record = this.#creationFields({ id, kind, modality, createdAt, title: 'Untitled creation',
+      const record = this.#creationFields({ id, kind, category, modality, createdAt, title: 'Untitled creation',
         mission: '', description: '', status: 'draft', readingNodeId: null, readingOffset: 0,
         sessionId: null, projectId: null, rootDir: null, placement: defaultCelestialPlacement(kind, index) }, input);
       const externalRoot = input.initializeFolder === true && record.rootDir;
@@ -646,6 +667,9 @@ export class CreationStore {
       record.kind = nextKind;
       record.modality = MODALITY_BY_KIND[nextKind];
     }
+    if (own(input, 'category') && input.category !== undefined) {
+      record.category = normalizeCategory(input.category, record.kind);
+    }
     for (const key of ['mission', 'description']) if (own(input, key)) record[key] = text(input[key], LIMITS.promptBytes, key);
     if (own(input, 'summary') && !own(input, 'description')) record.description = text(input.summary, LIMITS.promptBytes, 'description');
     if (own(input, 'status')) record.status = pick(input.status, CREATION_STATUSES, 'creation status');
@@ -691,6 +715,65 @@ export class CreationStore {
       return this.getCreation(id);
     });
   }
+  listDocStates(creationId) {
+    this.#creation(creationId);
+    const rows = this.all(`SELECT s.file_path, s.status, s.updated_at,
+      (SELECT COUNT(*) FROM json_each(r.data, '$.annotations') a
+        WHERE a.type='object' AND a.value ->> 'status' = 'open') AS open_count
+      FROM creation_doc_states s LEFT JOIN creation_doc_reviews r USING (creation_id, file_path)
+      WHERE s.creation_id=? ORDER BY s.file_path`, creationId);
+    return Object.fromEntries(rows.map(row => [row.file_path, {
+      status: row.status, updatedAt: row.updated_at, openReviewCount: row.open_count,
+    }]));
+  }
+
+  setDocState(creationId, filePath, status) {
+    this.#creation(creationId);
+    filePath = normalizeDocFilePath(filePath);
+    pick(status, DOC_WORKFLOW_STATUSES, 'document workflow status');
+    const updatedAt = now();
+    this.run(`INSERT INTO creation_doc_states (creation_id,file_path,status,updated_at) VALUES (?,?,?,?)
+      ON CONFLICT(creation_id,file_path) DO UPDATE SET status=excluded.status,updated_at=excluded.updated_at`,
+    creationId, filePath, status, updatedAt);
+    return { filePath, status, updatedAt };
+  }
+
+  getDocReview(creationId, filePath) {
+    this.#creation(creationId);
+    return data(this.one('SELECT data FROM creation_doc_reviews WHERE creation_id=? AND file_path=?', creationId, normalizeDocFilePath(filePath)));
+  }
+
+  saveDocReview(creationId, filePath, review) {
+    this.#creation(creationId);
+    filePath = normalizeDocFilePath(filePath);
+    let encoded;
+    try { encoded = json(review); } catch { fail('INVALID_REQUEST', 'Invalid document review'); }
+    if (!encoded?.startsWith('{')) fail('INVALID_REQUEST', 'Invalid document review');
+    if (Buffer.byteLength(encoded) > 512 * 1024) fail('LIMIT_EXCEEDED', 'Document review is too large');
+    this.run(`INSERT INTO creation_doc_reviews (creation_id,file_path,updated_at,data) VALUES (?,?,?,?)
+      ON CONFLICT(creation_id,file_path) DO UPDATE SET updated_at=excluded.updated_at,data=excluded.data`,
+    creationId, filePath, now(), encoded);
+    return JSON.parse(encoded);
+  }
+
+  updateDocReviewAnnotation(creationId, filePath, annotationId, status) {
+    pick(status, ['open', 'accepted', 'dismissed'], 'review annotation status');
+    boundedText(annotationId, 256, 'review annotation identifier', { required: true });
+    return this.transaction(() => {
+      const review = this.getDocReview(creationId, filePath);
+      if (!review) notFound('Document review');
+      const annotation = Array.isArray(review.annotations) && review.annotations.find(item => item?.id === annotationId);
+      if (!annotation) notFound('Review annotation');
+      annotation.status = status;
+      // Some consumers display the per-lens list as well as the sorted list.
+      if (Array.isArray(review.lensResults)) for (const lens of review.lensResults) {
+        const copy = Array.isArray(lens?.annotations) && lens.annotations.find(item => item?.id === annotationId);
+        if (copy) copy.status = status;
+      }
+      return this.saveDocReview(creationId, filePath, review);
+    });
+  }
+
   deleteCreation(id, { purgeWorkspace = false } = {}) {
     return this.transaction(() => {
       const row = this.#creation(id);

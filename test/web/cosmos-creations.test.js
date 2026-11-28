@@ -68,6 +68,9 @@ vi.mock('../../agent/yeaft/image-preview.js', () => ({ makeImagePreview: vi.fn()
 
 import { parseMentions } from '../../agent/yeaft/sessions/pre-flow.js';
 import { createCreationService } from '../../agent/yeaft/creations/service.js';
+import { handleAgentCreation } from '../../server/handlers/agent-creation.js';
+import { agents as relayAgents, webClients } from '../../server/context.js';
+import { userDb } from '../../server/database.js';
 import { createCreationRelay } from '../../server/handlers/client-creation.js';
 
 enableAutoUnmount(afterEach);
@@ -122,6 +125,7 @@ describe('Cosmos Creations — i18n, styles & celestial HUD', () => {
     const components = [
       'cosmos/creations/CosmosGalaxyOverlay.js', 'workbench/CreationTab.js',
       'workbench/CreationCreateModal.js', 'workbench/FileCanvasView.js',
+      'workbench/CanvasInlineEditPopover.js', 'workbench/CanvasReviewPanel.js',
     ];
     const missing = [];
     for (const component of components) {
@@ -140,7 +144,7 @@ describe('Cosmos Creations — i18n, styles & celestial HUD', () => {
     expect(cosmosCss).toMatch(/\.creation-legacy-banner\s*\{/);
     expect(cosmosCss).toMatch(/\.creation-galaxy-overlay\s+\.creation-kind-pill\s*\{/);
     expect(cosmosCss).not.toMatch(/(^|\n)\s*\.creation-kind-pill\b/);
-    expect(wbCss).toMatch(/\.creation-create-modal\s+\.creation-kind-pill\s*\{/);
+    expect(wbCss).toMatch(/\.creation-create-category-card\s*\{/);
     expect(readFileSync('web/styles/canvas.css', 'utf8')).toMatch(/@container canvas-pane\b/);
     expect(wbCss).toMatch(/@container creation-wb\b/);
   });
@@ -217,6 +221,9 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
   let uploads;
   let creationsStore;
   let chatStore;
+  let webClient;
+  let agentA;
+  let adapterFactory;
 
   beforeEach(async () => {
     tempDirA = mkdtempSync(join(tmpdir(), 'yeaft-creations-web-a-'));
@@ -231,7 +238,9 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     chatStore = useChatStore();
     creationsStore = useCreationsStore();
 
-    const webClient = { authenticated: true, userId: 'alice', role: 'user' };
+    webClient = { authenticated: true, userId: 'alice', role: 'user' };
+    agentA = { id: 'agent-a', ownerId: 'alice', capabilities: ['creations'] };
+    adapterFactory = vi.fn();
     const agentMap = new Map();
     const services = new Map();
 
@@ -252,7 +261,7 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
       forward: async (agent, msg) => {
         const svc = services.get(agent.id);
         try {
-          const data = await svc.request({ op: msg.op, payload: msg.payload });
+          const data = await svc.request({ op: msg.op, payload: msg.payload, meta: { targetClientId: msg.targetClientId } });
           await relay.response(agent.id, agent, {
             type: 'creation_response',
             requestId: msg.requestId,
@@ -295,9 +304,13 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
 
     serviceA = createCreationService({
       yeaftDir: tempDirA,
+      adapterFactory,
       engineFactory: mockEngineFactory,
-      emitEvent: (event) => {
-        creationsStore.handleCreationEvent({ type: 'creation_event', agentId: 'agent-a', event });
+      emitEvent: ({ _targetClientId, ...event }) => {
+        if (_targetClientId) return handleAgentCreation(agentA.id, agentA, {
+          type: 'creation_event', ownerId: agentA.ownerId, targetClientId: _targetClientId, event,
+        });
+        creationsStore.handleCreationEvent({ type: 'creation_event', agentId: agentA.id, event });
       },
     });
     serviceB = createCreationService({
@@ -308,7 +321,7 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
       },
     });
 
-    agentMap.set('agent-a', { id: 'agent-a', capabilities: ['creations'] });
+    agentMap.set(agentA.id, agentA);
     agentMap.set('agent-b', { id: 'agent-b', capabilities: ['creations'] });
     services.set('agent-a', serviceA);
     services.set('agent-b', serviceB);
@@ -330,6 +343,102 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     rmSync(tempDirA, { recursive: true, force: true });
     rmSync(tempDirB, { recursive: true, force: true });
     if (externalDir) rmSync(externalDir, { recursive: true, force: true });
+  });
+
+  it('round-trips isolated inline edits and concurrent partial reviews, then reloads workflow and annotation state', async () => {
+    const received = [];
+    const siblingSend = vi.fn();
+    const socket = send => ({ readyState: 1, send });
+    Object.assign(webClient, { encryptOutbound: false, ws: socket(raw => {
+      const msg = JSON.parse(raw);
+      received.push(msg);
+      creationsStore.handleCreationEvent(msg);
+    }) });
+    const sibling = { ...webClient, ws: socket(siblingSend) };
+    vi.spyOn(userDb, 'isActive').mockImplementation(id => id === webClient.userId);
+    relayAgents.set(agentA.id, agentA);
+    webClients.set(webClient.ws, webClient);
+    webClients.set(sibling.ws, sibling);
+
+    const filePath = 'docs/chapter.md';
+    const content = 'An old line.\nA second line.';
+    const finishEdit = deferred();
+    const reviewResults = [deferred(), deferred()];
+    const call = vi.fn().mockImplementationOnce(() => reviewResults[0].promise)
+      .mockImplementationOnce(() => reviewResults[1].promise);
+    adapterFactory.mockResolvedValueOnce({ model: 'fixture', adapter: {
+      async *captureStream() {
+        yield { type: 'text_delta', text: 'A new ' };
+        await finishEdit.promise;
+        yield { type: 'text_delta', text: 'line.' };
+      },
+    } }).mockResolvedValueOnce({ model: 'fixture', adapter: { call } });
+    try {
+      // Prove the sibling is an eligible recipient, not merely absent from the relay.
+      await handleAgentCreation(agentA.id, agentA, { type: 'creation_event', ownerId: agentA.ownerId,
+        event: { type: 'creation_upserted', creation: { id: 'public-probe', title: 'Shared Creation' } },
+      });
+      expect(siblingSend).toHaveBeenCalledTimes(1);
+      siblingSend.mockClear();
+      const { creation } = await creationsStore.createCreation(agentA.id, { title: 'Atlas', category: 'book' });
+      const target = { creationId: creation.id, filePath };
+      expect(await creationsStore.loadDocStates(agentA.id, creation.id)).toEqual({});
+      await creationsStore.setDocState(agentA.id, creation.id, filePath, 'review');
+      expect(await creationsStore.loadDocStates(agentA.id, creation.id)).toEqual({
+        [filePath]: { status: 'review', updatedAt: expect.any(String), openReviewCount: 0 },
+      });
+
+      const { jobId: edit } = await creationsStore.startInlineEdit(agentA.id, {
+        ...target, fullContent: content, selectedText: 'An old line.', lineStart: 1, preset: 'polish',
+      });
+      await vi.waitFor(() => expect(creationsStore.inlineEditJobs[edit]).toMatchObject({ status: 'running', revisedText: 'A new ' }));
+      finishEdit.resolve();
+      await vi.waitFor(() => expect(creationsStore.inlineEditJobs[edit]).toMatchObject({
+        status: 'completed', originalText: 'An old line.', revisedText: 'A new line.', diffHunks: expect.any(Array),
+      }));
+      expect(received.filter(msg => msg.event.jobId === edit).map(msg => msg.event.type)).toEqual([
+        'inline_edit_delta', 'inline_edit_delta', 'inline_edit_complete',
+      ]);
+
+      const lensIds = ['logic_continuity', 'prose_craft'];
+      const { jobId: review } = await creationsStore.startDocumentReview(agentA.id, { ...target, content, lensIds });
+      // Neither reviewer can finish until both have independently reached the adapter.
+      await vi.waitFor(() => expect(call).toHaveBeenCalledTimes(2));
+      reviewResults[1].resolve({ text: 'invalid review JSON' });
+      await vi.waitFor(() => expect(creationsStore.reviewJobs[review]).toMatchObject({
+        status: 'running', lensResults: [expect.objectContaining({ lensId: lensIds[1], status: 'failed' })],
+      }));
+      reviewResults[0].resolve({ text: JSON.stringify({ summary: 'Continuity needs work', annotations: [
+        { severity: 'blocker', title: 'Clarify the timeline', quote: 'An old line.', lineStart: 1, suggestedReplacement: 'A new line.' },
+      ] }) });
+      await vi.waitFor(() => expect(creationsStore.reviewJobs[review]).toMatchObject({
+        status: 'partial', lensResults: [
+          expect.objectContaining({ lensId: lensIds[0], status: 'completed' }),
+          expect.objectContaining({ lensId: lensIds[1], status: 'failed' }),
+        ],
+      }));
+      expect(received.filter(msg => msg.event.jobId === review).map(msg => msg.event.type)).toEqual([
+        'review_lens_complete', 'review_lens_complete', 'review_complete',
+      ]);
+      expect(siblingSend).not.toHaveBeenCalled();
+      const persisted = await creationsStore.loadDocReview(agentA.id, creation.id, filePath);
+      expect(persisted.review).toMatchObject({ jobId: review, status: 'partial', annotations: [
+        expect.objectContaining({ status: 'open', severity: 'blocker', title: 'Clarify the timeline', suggestedReplacement: 'A new line.' }),
+      ] });
+      const [annotation] = persisted.review.annotations;
+      expect((await creationsStore.loadDocStates(agentA.id, creation.id))[filePath]).toMatchObject({ status: 'review', openReviewCount: 1 });
+      await creationsStore.resolveReviewAnnotation(agentA.id, creation.id, filePath, annotation.id, 'accepted');
+      expect((await creationsStore.loadDocReview(agentA.id, creation.id, filePath)).review.annotations)
+        .toEqual([{ ...annotation, status: 'accepted' }]);
+      await creationsStore.setDocState(agentA.id, creation.id, filePath, 'final');
+      expect((await creationsStore.loadDocStates(agentA.id, creation.id))[filePath]).toMatchObject({ status: 'final', openReviewCount: 0 });
+    } finally {
+      finishEdit.resolve();
+      for (const result of reviewResults) result.resolve({ text: '{"annotations":[]}' });
+      webClients.delete(sibling.ws);
+      webClients.delete(webClient.ws);
+      relayAgents.delete(agentA.id);
+    }
   });
 
   it('enforces strict per-Agent isolation and round-trips full Creation lifecycle', async () => {
@@ -817,17 +926,17 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
 
     expect(serviceA.store.getCreation(partial.id)).toMatchObject({ title: 'Initial title', kind: 'book' });
     await title.setValue('Edited title');
-    await modal.get('.creation-kind-pill:has(.is-deck)').trigger('click');
+    await button(modal, t('creation.category.deck'), '.creation-create-category-title').trigger('click');
     modal.get('button[type="submit"]').element.click();
     await flushPromises();
     expect(submit).toHaveBeenLastCalledWith(expect.objectContaining({
-      title: 'Edited title', kind: 'deck', resumeProjectId: 'saved-project', resumeSessionId: 'saved-session', resumeCreationId: partial.id,
+      title: 'Edited title', kind: 'deck', category: 'deck', resumeProjectId: 'saved-project', resumeSessionId: 'saved-session', resumeCreationId: partial.id,
     }));
     expect(modal.emitted('created')).toEqual([[expect.objectContaining({ sessionId: 'saved-session', projectId: 'saved-project' })]]);
     expect(serviceA.store.listCreations()).toEqual([expect.objectContaining({
       id: partial.id, sessionId: 'saved-session', projectId: 'saved-project',
     })]);
-    expect(serviceA.store.getCreation(partial.id)).toMatchObject({ title: 'Edited title', kind: 'deck' });
+    expect(serviceA.store.getCreation(partial.id)).toMatchObject({ title: 'Edited title', kind: 'deck', category: 'deck' });
     const messages = send.mock.calls.map(([request]) => request);
     expect(messages.filter(request => request.type === 'yeaft_create_session')).toHaveLength(1);
     expect(messages.filter(request => request.type === 'yeaft_project_mutation' && request.op === 'create')).toHaveLength(1);
@@ -1151,16 +1260,16 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
       expect(modal.get('[role="alert"]').text()).toContain('timed out');
       expect(modal.emitted('created')).toBeUndefined();
       await modal.get('#creation-create-title').setValue('Revised slides');
-      await modal.get('.creation-kind-pill:has(.is-deck)').trigger('click');
+      await button(modal, t('creation.category.deck'), '.creation-create-category-title').trigger('click');
       modal.get('button[type="submit"]').element.click();
       await flushPromises();
-      expect(workspace).toHaveBeenLastCalledWith(expect.objectContaining({ resumeCreationId: undefined, title: 'Revised slides', kind: 'deck' }));
+      expect(workspace).toHaveBeenLastCalledWith(expect.objectContaining({ resumeCreationId: undefined, title: 'Revised slides', kind: 'deck', category: 'deck' }));
       const creates = send.mock.calls.map(([msg]) => msg).filter(msg => msg.op === 'create_creation');
       expect(creates).toHaveLength(2);
       expect(creates[0].payload.importKey).toBeTruthy();
       expect(creates[1].payload.importKey).toBe(creates[0].payload.importKey);
       expect(modal.emitted('created')).toEqual([[expect.objectContaining({ creation: expect.objectContaining({ id }) })]]);
-      expect(serviceA.store.getCreation(id)).toMatchObject({ title: 'Revised slides', kind: 'deck', sessionId: 'linked-session' });
+      expect(serviceA.store.getCreation(id)).toMatchObject({ title: 'Revised slides', kind: 'deck', category: 'deck', sessionId: 'linked-session' });
       expect(serviceA.store.listCreations()).toHaveLength(1);
     } finally {
       vi.useRealTimers();
@@ -2771,6 +2880,7 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
 });
 
 const t = key => en[key] || key;
+const interpolateTranslation = (key, params = {}) => t(key).replace(/\{(\w+)\}/g, (match, name) => params[name] ?? match);
 const route = { runtimeProvider: 'yeaft', agentId: 'agent-a', sessionId: 'session-a' };
 const rootDir = '/workspace/atlas';
 const routeKey = 'yeaft:agent-a:session-a';
@@ -2823,6 +2933,23 @@ function button(wrapper, label, selector = 'button') {
   const match = wrapper.findAll(selector).find(item => item.text() === label);
   expect(match, `Missing ${selector} with text ${label}`).toBeDefined();
   return match;
+}
+
+async function openOverflowAction(wrapper, label) {
+  await wrapper.get(`[aria-label="${t('creation.workbench.moreActions')}"]`).trigger('click');
+  await button(wrapper.get('.creation-wb-more-menu'), label, '[role="menuitem"]').trigger('click');
+}
+
+async function openCanvasOverflowAction(wrapper, label) {
+  await wrapper.get(`[aria-label="${t('creation.canvas.moreActions')}"]`).trigger('click');
+  const menu = wrapper.get('.canvas-more-menu');
+  const item = menu.findAll('[role="menuitem"]').find(entry => {
+    const text = entry.element.cloneNode(true);
+    text.querySelectorAll('[aria-hidden="true"]').forEach(icon => icon.remove());
+    return text.textContent.trim() === label;
+  });
+  expect(item, `Missing Canvas menu action: ${label}`).toBeDefined();
+  await item.trigger('click');
 }
 
 async function registerBrowserStores() {
@@ -2886,6 +3013,257 @@ describe('File Canvas and route-scoped composer references', () => {
     context.clearCanvasContextRefs(routeKey);
     context.clearCanvasContextRefs(otherRoute);
     vi.unstubAllGlobals();
+  });
+
+  async function canvasAiFixture(reply) {
+    const { chat } = await registerBrowserStores();
+    const { useCreationsStore } = await import('../../web/stores/creations.js');
+    const store = useCreationsStore();
+    const sessionSend = vi.spyOn(chat, 'sendYeaftSessionMessage');
+    const wire = vi.spyOn(chat, 'sendWsMessage').mockImplementation(request => {
+      if (request.type !== 'creation_request') return true;
+      queueMicrotask(() => store.handleCreationResponse({
+        ...request, type: 'creation_response', ok: true, data: reply(request),
+      }));
+      return true;
+    });
+    const file = Vue.reactive({ name: 'chapter.md', path: '/atlas/chapter.md', content: 'First line\nOld passage\nLast line' });
+    const wrapper = render(FileCanvasView, { translate: interpolateTranslation, props: {
+      routeKey, file, agentId: route.agentId, creationId: 'atlas',
+      'onUpdate:content': content => { file.content = content; },
+    } });
+    const event = (type, fields) => store.handleCreationEvent({
+      agentId: route.agentId, event: { type, creationId: 'atlas', filePath: file.path, ...fields },
+    });
+    async function selectPassage() {
+      if (!wrapper.find('textarea').exists()) await button(wrapper, t('creation.canvas.edit')).trigger('click');
+      const editor = wrapper.get('textarea');
+      const start = file.content.indexOf('Old passage');
+      editor.element.setSelectionRange(start, start + 'Old passage'.length);
+      await editor.trigger('select');
+      return editor;
+    }
+    return { store, wire, sessionSend, file, wrapper, event, selectPassage };
+  }
+
+  it('keeps headingless documents uncluttered and exposes typography, references and workflow controls', async () => {
+    const file = { name: 'notes.md', path: '/atlas/notes.md', content: 'Three plain words' };
+    const wrapper = render(FileCanvasView, { translate: interpolateTranslation, props: { file, routeKey, showOpenInFiles: true } });
+    const toolbar = wrapper.get('.canvas-toolbar');
+    expect(toolbar.find(`[title="${t('creation.canvas.toc')}"]`).exists()).toBe(false);
+    expect(toolbar.find('.canvas-status-pill').exists()).toBe(false);
+    expect(toolbar.find('.canvas-word-count, .canvas-zoom-readout, .canvas-ref-btn').exists()).toBe(false);
+    const aa = button(toolbar, 'Aa');
+    await aa.trigger('click');
+    const typography = toolbar.get('.canvas-typography-popover');
+    expect(typography.get('.canvas-word-count').text()).toBe('3 words');
+    expect(typography.get('.canvas-zoom-readout').text()).toBe('16px');
+    await typography.get(`[title="${t('git.zoomIn')}"]`).trigger('click');
+    expect(typography.get('.canvas-zoom-readout').text()).toBe('17px');
+    expect(toolbar.findAll('button').map(item => item.text())).not.toContain(t('creation.canvas.openInFiles'));
+    await openCanvasOverflowAction(wrapper, t('creation.canvas.referenceFile'));
+    expect(context.getCanvasContextRefs(routeKey)).toMatchObject([{ kind: 'doc', filePath: file.path }]);
+    await openCanvasOverflowAction(wrapper, t('creation.canvas.openInFiles'));
+    expect(wrapper.emitted('open-in-files')).toEqual([[]]);
+    await wrapper.setProps({ creationId: 'atlas' });
+    const status = toolbar.get('.canvas-status-pill');
+    expect(status.classes()).toContain('is-draft');
+    await status.trigger('click');
+    await button(toolbar, t('creation.docStatus.review'), '[role="menuitem"]').trigger('click');
+    expect(wrapper.emitted('update:doc-status')).toEqual([['review']]);
+    await wrapper.setProps({ docStatus: 'review' });
+    expect(status.classes()).toContain('is-review');
+  });
+
+  it('streams a category-aware quick edit, applies and undoes the diff, and cancels without sending a Session message', async () => {
+    let nextJob = 0;
+    const { store, wire, sessionSend, file, wrapper, event, selectPassage } = await canvasAiFixture(({ op }) => (
+      op === 'inline_edit' ? { jobId: `edit-${++nextJob}`, status: 'running' } : { cancelled: true }
+    ));
+    const start = vi.spyOn(store, 'startInlineEdit');
+    const original = file.content;
+    const editor = await selectPassage();
+    const popover = () => wrapper.get('.canvas-inline-popover');
+    const presets = () => popover().findAll('.canvas-inline-presets > button:not(.canvas-ref-btn)').map(item => item.text());
+    expect(presets()).toEqual(['polish', 'vivid', 'pace'].map(preset => t(`creation.inlineEdit.${preset}`)));
+    await button(popover(), t('creation.inlineEdit.vivid')).trigger('click');
+    await flushPromises();
+    expect(start).toHaveBeenLastCalledWith(route.agentId, expect.objectContaining({
+      category: 'book', preset: 'vivid', filePath: file.path, selectedText: 'Old passage', fullContent: original, lineStart: 2, lineEnd: 2,
+    }));
+    event('inline_edit_delta', { jobId: 'edit-1', delta: 'New ' });
+    await Vue.nextTick();
+    expect(popover().get('.canvas-inline-diff-box').element.textContent).toBe('New ');
+    event('inline_edit_delta', { jobId: 'edit-1', delta: 'passage' });
+    await Vue.nextTick();
+    expect(popover().get('.canvas-inline-diff-box').text()).toBe('New passage');
+    event('inline_edit_complete', { jobId: 'edit-1', status: 'completed', originalText: 'Old passage', revisedText: 'New passage' });
+    await Vue.nextTick();
+    expect(popover().get('.canvas-diff-del').text()).toBe('Old');
+    expect(popover().get('.canvas-diff-add').text()).toBe('New');
+    expect(file.content).toBe(original);
+    await button(popover(), `✓ ${t('creation.inlineEdit.replace')}`).trigger('click');
+    expect(editor.element.value).toBe('First line\nNew passage\nLast line');
+    await button(wrapper.get('.canvas-undo-toast'), t('creation.canvas.undoReplace')).trigger('click');
+    expect(editor.element.value).toBe(original);
+    expect(wrapper.find('.canvas-undo-toast').exists()).toBe(false);
+
+    await wrapper.setProps({ category: 'office_doc' });
+    await selectPassage();
+    expect(presets()).toEqual(['concise', 'formal', 'bullets'].map(preset => t(`creation.inlineEdit.${preset}`)));
+    const submitCustom = async () => {
+      const input = popover().get('input');
+      await input.setValue('  Use plainer words  ');
+      await input.trigger('keydown.enter');
+      await flushPromises();
+      expect(start).toHaveBeenLastCalledWith(route.agentId, expect.objectContaining({
+        category: 'office_doc', instruction: 'Use plainer words', preset: undefined,
+      }));
+    };
+    await submitCustom();
+    await button(popover(), t('creation.inlineEdit.cancel')).trigger('click');
+    await flushPromises();
+    expect(store.inlineEditJobs['edit-2']).toBeUndefined();
+    await submitCustom();
+    // Collapsing the selection closes the popover while the third job is still running.
+    editor.element.setSelectionRange(0, 0);
+    await editor.trigger('select');
+    await flushPromises();
+    expect(wrapper.find('.canvas-inline-popover').exists()).toBe(false);
+    expect(store.inlineEditJobs['edit-3']).toBeUndefined();
+    expect(wire.mock.calls.map(([request]) => [request.type, request.op, request.payload.jobId])).toEqual([
+      ['creation_request', 'inline_edit', undefined],
+      ['creation_request', 'inline_edit', undefined],
+      ['creation_request', 'cancel_ai_job', 'edit-2'],
+      ['creation_request', 'inline_edit', undefined],
+      ['creation_request', 'cancel_ai_job', 'edit-3'],
+    ]);
+    expect(sessionSend).not.toHaveBeenCalled();
+    expect(context.getCanvasContextRefs(routeKey)).toEqual([]);
+    expect(file.content).toBe(original);
+  });
+
+  it('reviews with category lenses and a custom prompt, then resolves and references annotations', async () => {
+    const lensIds = ['executive_decision', 'consistency_clarity', 'risk_execution'];
+    const lensLabel = id => t(`creation.review.lens.${id}`);
+    const lenses = [...lensIds, 'custom'];
+    const annotations = [
+      { id: 'blocker', lensId: lensIds[0], severity: 'blocker', title: 'State the decision', lineStart: 2, lineEnd: 2,
+        quote: 'Old passage', suggestedReplacement: 'Approve the plan' },
+      { id: 'dismiss', lensId: lensIds[0], severity: 'suggestion', title: 'Add background', lineStart: 1 },
+      { id: 'send-1', lensId: lensIds[1], severity: 'suggestion', title: 'Define terms', lineStart: 3, comment: 'Explain the acronym' },
+      { id: 'send-2', lensId: 'custom', severity: 'praise', title: 'Good summary', lineStart: 1, comment: 'Keep the opening' },
+    ].map(ann => ({ ...ann, status: 'open' }));
+    const { store, wire, file, wrapper, event } = await canvasAiFixture(({ op, payload }) => {
+      if (op === 'review_document') return { jobId: 'review', status: 'running', lenses };
+      if (op === 'update_review_annotation') {
+        return { review: { status: 'partial', annotations: store.getDocReview(route.agentId, 'atlas', file.path).annotations
+          .map(ann => ann.id === payload.annotationId ? { ...ann, status: payload.status } : ann) } };
+      }
+      return {};
+    });
+    await wrapper.setProps({ category: 'office_doc', docStatus: 'review' });
+    await button(wrapper, t('creation.canvas.edit')).trigger('click');
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    const panel = wrapper.get('.canvas-review-panel');
+    expect(panel.findAll('.canvas-review-lens-grid button.active').map(chip => chip.text())).toEqual(lensIds.map(lensLabel));
+    await panel.get('.canvas-review-custom-input').setValue('Check the executive summary');
+    await button(panel, t('creation.review.start')).trigger('click');
+    await flushPromises();
+    expect(wire).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'review_document', payload: expect.objectContaining({
+      scope: 'document', category: 'office_doc', content: file.content, lensIds, customPrompt: 'Check the executive summary',
+    }) }));
+
+    const progress = () => panel.findAll('.canvas-review-progress-chips .canvas-review-lens-chip');
+    expect(progress().map(chip => chip.text())).toEqual([...lensIds.map(lensLabel), t('creation.review.customLens')].map(label => `${label} …`));
+    const lensResults = lenses.map(lensId => ({ lensId, status: lensId === lensIds[2] ? 'failed' : 'completed' }));
+    for (const index of [0, 2]) event('review_lens_complete', { jobId: 'review', lensResult: lensResults[index] });
+    await Vue.nextTick();
+    expect(store.reviewJobs.review.lensResults).toEqual([lensResults[0], lensResults[2]]);
+    expect(progress()[0].classes()).toContain('active');
+    expect(progress()[1].text()).toContain('…');
+    expect(progress()[2].classes()).toContain('is-failed');
+    event('review_complete', { jobId: 'review', status: 'partial', lensResults, annotations, overallSummary: 'Improve clarity' });
+    await Vue.nextTick();
+    expect(progress()).toHaveLength(0);
+    expect(panel.get('[role="status"]').text()).toContain(t('creation.review.partialWarning'));
+    expect(panel.get('.canvas-review-summary').text()).toContain('Improve clarity');
+
+    const cards = () => panel.findAll('.canvas-review-card');
+    const titles = () => cards().map(card => card.get('.canvas-review-card-title').text());
+    const card = title => cards().find(item => item.get('.canvas-review-card-title').text() === title);
+    const markFinal = () => panel.findAll('.canvas-review-bulk-bar button').find(item => item.text().includes(t('creation.docStatus.markFinal')));
+    expect(titles()).toEqual(annotations.map(ann => ann.title));
+    expect(markFinal()).toBeUndefined();
+    await button(panel, `${t('creation.review.severitySuggestion')} (2)`).trigger('click');
+    expect(titles()).toEqual(['Add background', 'Define terms']);
+    await button(panel, lensLabel(lensIds[1])).trigger('click');
+    expect(titles()).toEqual(['Define terms']);
+    await button(panel, t('creation.review.filterAll')).trigger('click');
+    await button(panel, `${t('creation.review.filterAll')} (4)`).trigger('click');
+    expect(titles()).toEqual(annotations.map(ann => ann.title));
+
+    const blocker = card('State the decision');
+    await button(blocker, t('creation.review.lineRef').replace('{line}', '2')).trigger('click');
+    const editor = wrapper.get('textarea.canvas-doc-editor').element;
+    expect(editor.value.slice(editor.selectionStart, editor.selectionEnd)).toBe('Old passage');
+    await blocker.get('input').setValue(true);
+    await button(blocker, t('creation.review.acceptFix')).trigger('click');
+    await flushPromises();
+    expect(editor.value).toBe('First line\nApprove the plan\nLast line');
+    expect(blocker.classes()).toContain('is-accepted');
+    expect(markFinal()).toBeDefined();
+    const dismiss = card('Add background');
+    await dismiss.get('input').setValue(true);
+    await button(dismiss, t('creation.review.dismiss')).trigger('click');
+    await flushPromises();
+    expect(dismiss.classes()).toContain('is-dismissed');
+    expect(wire.mock.calls.map(([request]) => request).filter(request => request.op === 'update_review_annotation').map(request => request.payload)).toEqual([
+      { creationId: 'atlas', filePath: file.path, annotationId: 'blocker', status: 'accepted' },
+      { creationId: 'atlas', filePath: file.path, annotationId: 'dismiss', status: 'dismissed' },
+    ]);
+    expect(store.getDocReview(route.agentId, 'atlas', file.path).annotations.map(ann => ann.status)).toEqual(['accepted', 'dismissed', 'open', 'open']);
+    await card('Define terms').get('input').setValue(true);
+    await card('Good summary').get('input').setValue(true);
+    await button(panel, `✦ ${t('creation.review.sendToSession')}`).trigger('click');
+    expect(context.getCanvasContextRefs(routeKey)).toMatchObject([{ kind: 'doc', filePath: file.path,
+      snippet: '1. [L3] Define terms: Explain the acronym\n2. [L1] Good summary: Keep the opening' }]);
+    expect(panel.findAll('input:checked')).toHaveLength(0);
+    await markFinal().trigger('click');
+    expect(wrapper.emitted('update:doc-status')).toEqual([['final']]);
+  });
+
+  it('offers Mark as Final when a completed review has no annotations', async () => {
+    const { wrapper } = await canvasAiFixture(({ op }) => (
+      op === 'get_doc_review' ? { review: { scope: 'document', status: 'completed', annotations: [] } } : {}
+    ));
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    const panel = wrapper.get('.canvas-review-panel');
+    expect(panel.findAll('.canvas-review-card')).toHaveLength(0);
+    expect(panel.get('.canvas-review-list').text()).toContain(t('creation.review.noIssues'));
+    await button(panel, `✓ ${t('creation.docStatus.markFinal')}`).trigger('click');
+    expect(wrapper.emitted('update:doc-status')).toEqual([['final']]);
+  });
+
+  it('starts paragraph quick-review immediately for the selected text and lens', async () => {
+    const { wire, wrapper, file, selectPassage } = await canvasAiFixture(({ op }) => (
+      op === 'review_document' ? { jobId: 'paragraph', status: 'running', lenses: ['prose_craft'], scope: 'selection' } : {}
+    ));
+    await selectPassage();
+    const popover = wrapper.get('.canvas-inline-popover');
+    await button(popover, `${t('creation.inlineEdit.quickReview')} ▾`).trigger('click');
+    await button(popover, t('creation.review.lens.prose_craft'), '[role="menuitem"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('.canvas-inline-popover').exists()).toBe(false);
+    const panel = wrapper.get('.canvas-review-panel');
+    expect(panel.get('.canvas-review-header-title .canvas-badge').text()).toBe(t('creation.review.scopeSelection'));
+    expect(panel.get('[role="status"]').text()).toContain(t('creation.review.running'));
+    expect(wire.mock.calls.map(([request]) => request).filter(request => request.op === 'review_document')).toEqual([
+      expect.objectContaining({ payload: expect.objectContaining({ scope: 'selection', selectedText: 'Old passage',
+        lineStart: 2, lineEnd: 2, filePath: file.path, lensIds: ['prose_craft'] }) }),
+    ]);
   });
 
   it('deduplicates references, dispatches the canonical reference, and evicts only the oldest item on the same route', () => {
@@ -3078,11 +3456,32 @@ describe('File Canvas and route-scoped composer references', () => {
     const wrapper = render(FileCanvasView, { props: { routeKey, file } });
     const image = wrapper.get('.canvas-image-stage img');
     expect(image.attributes('src')).toBe(file.blobUrl);
-    await wrapper.get(`button[title="${t('git.zoomIn')}"]`).trigger('click');
-    expect(wrapper.get('.canvas-zoom-readout').text()).toBe('125%');
-    expect(image.element.style.transform).toBe('scale(1.25)');
-    await wrapper.get(`button[title="${t('git.zoomOut')}"]`).trigger('click');
-    expect(wrapper.get('.canvas-zoom-readout').text()).toBe('100%');
+    const viewport = wrapper.get('.canvas-image-viewport');
+    const readout = () => wrapper.find('.canvas-zoom-readout');
+    expect(viewport.classes()).toContain('is-fit');
+    expect(readout().exists()).toBe(false);
+    await viewport.trigger('dblclick');
+    expect(readout().text()).toBe('100%');
+    expect(viewport.classes()).not.toContain('is-fit');
+    await viewport.trigger('dblclick');
+    expect(viewport.classes()).toContain('is-fit');
+    expect(readout().exists()).toBe(false);
+
+    const stage = wrapper.get('.canvas-image-stage');
+    await stage.trigger('wheel', { deltaY: -100 });
+    expect(readout().exists()).toBe(false);
+    await stage.trigger('wheel', { ctrlKey: true, deltaY: -100 });
+    expect(readout().text()).toBe('115%');
+    expect(image.element.style.transform).toBe('scale(1.15)');
+    await stage.trigger('wheel', { ctrlKey: true, deltaY: 100 });
+    expect(readout().text()).toBe('100%');
+    await stage.trigger('wheel', { ctrlKey: true, deltaY: -100 });
+    await openCanvasOverflowAction(wrapper, t('creation.canvas.actualSize'));
+    expect(readout().text()).toBe('100%');
+    expect(image.element.style.transform).toBe('scale(1)');
+    await openCanvasOverflowAction(wrapper, t('creation.canvas.fit'));
+    expect(viewport.classes()).toContain('is-fit');
+    expect(readout().exists()).toBe(false);
     await wrapper.get('.canvas-ref-btn').trigger('click');
     expect(context.getCanvasContextRefs(routeKey)).toMatchObject([{ kind: 'image', filePath: file.path }]);
 
@@ -3093,13 +3492,12 @@ describe('File Canvas and route-scoped composer references', () => {
     expect(wrapper.find('.canvas-image-stage svg, .canvas-image-stage script, .canvas-image-stage [onload]').exists()).toBe(false);
   });
 
-  it('sets video playback speed and adds, seeks, references and deletes timestamp markers', async () => {
+  it('uses native video controls and adds, seeks, references and deletes timestamp markers', async () => {
     const file = { name: 'trailer.webm', path: '/atlas/trailer.webm', blobUrl: 'blob:trailer' };
     const wrapper = render(FileCanvasView, { props: { routeKey, file } });
     const video = wrapper.get('video[controls]');
     expect(video.attributes('src')).toBe(file.blobUrl);
-    await wrapper.get('.canvas-rate-select').setValue('1.5');
-    expect(video.element.playbackRate).toBe(1.5);
+    expect(wrapper.find('.canvas-rate-select').exists()).toBe(false);
     video.element.currentTime = 65.8;
     await video.trigger('timeupdate');
     expect(wrapper.get('.canvas-ref-btn').text()).toContain('@ 01:05');
@@ -3294,6 +3692,99 @@ describe('Folder Creation and Files in Workbench', () => {
   });
 
   afterEach(() => vi.unstubAllGlobals());
+
+  it('consolidates title switching, create actions and category switching in the Workbench topbar', async () => {
+    creations.byAgent[route.agentId].list = [{ id: 'atlas', title: 'Atlas', category: 'book', rootDir, sessionId: route.sessionId }];
+    const send = mockWorkbenchFiles(chat, { [rootDir]: [] }, {}, request => {
+      if (request.type !== 'creation_request') return;
+      queueMicrotask(() => creations.handleCreationResponse({ ...request, type: 'creation_response', ok: true,
+        data: request.op === 'update_creation' ? { creation: { ...creations.byAgent[route.agentId].list[0], ...request.payload } } : {} }));
+      return true;
+    });
+    const wrapper = render(CreationTab, { props: routeProps });
+    await flushPromises();
+    expect(wrapper.findAll('.creation-wb-topbar')).toHaveLength(1);
+    const topbar = () => wrapper.get('.creation-wb-topbar');
+    expect(topbar().get('.creation-wb-title-trigger').text()).toBe('Atlas');
+    expect(topbar().findAll('[role="tab"]').map(tab => tab.text())).toEqual([
+      t('creation.workbench.docs'), t('creation.workbench.images'), t('creation.workbench.videos'),
+    ]);
+    expect(topbar().findAll('.creation-wb-tab-count')).toHaveLength(0);
+    expect(wrapper.get('.creation-wb-doc-tree-head').findAll('button').map(item => item.attributes('aria-label')))
+      .toEqual([t('files.hideTree')]);
+    await topbar().get('.creation-wb-title-trigger').trigger('click');
+    expect(wrapper.get('.creation-wb-onboarding .creation-wb-back-btn').exists()).toBe(true);
+    await wrapper.get('.creation-wb-back-btn').trigger('click');
+    await topbar().get(`[aria-label="${t('creation.workbench.addMenu')}"]`).trigger('click');
+    const add = topbar().get('.creation-wb-add-menu');
+    expect(add.findAll('[role="menuitem"]').map(item => item.text())).toEqual([
+      t('creation.workbench.newDoc'), t('creation.workbench.newFolder'), t('creation.workbench.uploadMedia'),
+    ]);
+    await button(add, t('creation.workbench.newDoc'), '[role="menuitem"]').trigger('click');
+    expect(wrapper.get('.creation-wb-mini-input').isVisible()).toBe(true);
+    await wrapper.get('.creation-wb-mini-input').trigger('keydown.esc');
+    const more = () => topbar().get(`[aria-label="${t('creation.workbench.moreActions')}"]`);
+    await more().trigger('click');
+    const categories = () => topbar().get('.creation-wb-more-menu [role="radiogroup"]');
+    expect(categories().findAll('[role="radio"]')).toHaveLength(6);
+    expect(categories().get('[aria-checked="true"]').text()).toBe(t('creation.category.book'));
+    await button(categories(), t('creation.category.office_doc'), '[role="radio"]').trigger('click');
+    await flushPromises();
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ op: 'update_creation', payload: expect.objectContaining({
+      creationId: 'atlas', category: 'office_doc',
+    }) }));
+    await more().trigger('click');
+    expect(categories().get('[aria-checked="true"]').text()).toBe(t('creation.category.office_doc'));
+  });
+
+  it('renders only the Canvas toolbar on both image and video detail', async () => {
+    creations.byAgent[route.agentId].list = [{ id: 'atlas', rootDir, sessionId: route.sessionId }];
+    mockWorkbenchFiles(chat, { [rootDir]: [{ name: 'cover.svg', type: 'file' }, { name: 'trailer.mp4', type: 'file' }] },
+      { [`${rootDir}/cover.svg`]: '<svg xmlns="http://www.w3.org/2000/svg"/>' }, request => {
+        if (request.type === 'video_metadata') return { type: 'video_metadata', videoStream: true, previewUrl: '/api/preview/trailer.mp4' };
+      });
+    const wrapper = render(CreationTab, { props: routeProps });
+    await flushPromises();
+    for (const [tab, kind] of [['images', 'image'], ['videos', 'video']]) {
+      const tabButton = button(wrapper, t(`creation.workbench.${tab}`), '[role="tab"] > span:first-child');
+      expect(tabButton.element.parentElement.querySelector('.creation-wb-tab-count').textContent).toBe('1');
+      await tabButton.trigger('click');
+      await wrapper.get(`.creation-wb-${kind}-card`).trigger('click');
+      await flushPromises();
+      const detail = wrapper.get(`.creation-wb-media-detail:has(.canvas-kind-${kind})`);
+      expect(detail.element.closest('[role="tabpanel"]').style.display).not.toBe('none');
+      expect(detail.findAll('.creation-wb-media-bar')).toHaveLength(0);
+      expect(detail.findAll('.canvas-toolbar')).toHaveLength(1);
+      expect(detail.get(`.canvas-${kind}-stage`).exists()).toBe(true);
+    }
+  });
+
+  it.each(['eligible', 'offline', 'prefilled folder'])('shows six category cards and the expected settings disclosure (%s)', async mode => {
+    const { default: CreationCreateModal } = await import('../../web/components/workbench/CreationCreateModal.js');
+    chat.agents = mode === 'offline' ? [] : [{ ...chat.agents[0], name: 'Atlas Agent' }];
+    const props = mode === 'prefilled folder' ? { initialRootDir: rootDir } : {};
+    const modal = render(CreationCreateModal, { props, stubs: { Teleport: true }, attachTo: document.body });
+    await flushPromises();
+    const expected = ['article', 'book', 'office_doc', 'deck', 'sheet', 'media'].map(id => t(`creation.category.${id}`));
+    expect(modal.findAll('.creation-create-category-card .creation-create-category-title').map(item => item.text())).toEqual(expected);
+    expect(modal.get('.creation-create-category-card[aria-checked="true"]').text()).toContain(t('creation.category.book'));
+    const settings = modal.get('.creation-create-settings-bar');
+    const toggle = settings.get('.creation-create-settings-toggle');
+    const panel = settings.get('.creation-create-settings-panel');
+    expect(settings.get('.creation-create-settings-summary').text()).toContain(t('creation.create.newSessionShort'));
+    expect(toggle.attributes('aria-expanded')).toBe(String(mode !== 'eligible'));
+    expect(panel.isVisible()).toBe(mode !== 'eligible');
+    if (mode === 'eligible') {
+      toggle.element.click();
+      await Vue.nextTick();
+      expect(modal.get('.creation-create-settings-toggle').attributes('aria-expanded')).toBe('true');
+      expect(modal.get('.creation-create-settings-panel').isVisible()).toBe(true);
+    } else if (mode === 'prefilled folder') {
+      expect(panel.get('#creation-create-folder').element.value).toBe(rootDir);
+    } else {
+      expect(panel.get('.creation-create-hint.is-warning').text()).toMatch(/agent/i);
+    }
+  });
 
   it('opens Markdown in Files, switches between Preview, Canvas and Edit, and promotes a folder', async () => {
     const { default: FilesTab } = await import('../../web/components/FilesTab.js');
@@ -3584,7 +4075,7 @@ describe('Folder Creation and Files in Workbench', () => {
     expect(requests()).toHaveLength(1);
     expect(video().attributes('src')).toBe(new URL('/api/preview/intro-1000', location.origin).href);
     const rescan = async () => {
-      await wrapper.get(`[aria-label="${t('creation.workbench.refresh')}"]`).trigger('click');
+      await openOverflowAction(wrapper, t('creation.workbench.refresh'));
       await flushPromises();
     };
     await rescan();
@@ -3755,7 +4246,7 @@ describe('Folder Creation and Files in Workbench', () => {
     await flushPromises();
     expect(tab.vm.activeCreation.id).toBe('literal');
     expect(tab.vm.activeRootDir).toBe(workspace);
-    expect(send.mock.calls.map(([msg]) => msg)).toEqual([
+    expect(send.mock.calls.map(([msg]) => msg).filter(msg => ['list_directory', 'read_file'].includes(msg.type))).toEqual([
       expect.objectContaining({ type: 'list_directory', dirPath: workspace, workDir: workspace }),
       expect.objectContaining({ type: 'read_file', filePath: path, workDir: workspace }),
     ]);
@@ -4043,7 +4534,7 @@ describe('Folder Creation and Files in Workbench', () => {
     await select('README.md');
     expect(reads()).toEqual([second, first]);
     failSubdir = true;
-    await wrapper.get(`[aria-label="${t('creation.workbench.refresh')}"]`).trigger('click');
+    await openOverflowAction(wrapper, t('creation.workbench.refresh'));
     await flushPromises();
     expect(wrapper.vm.activeDocFile).toMatchObject({ path: second, content: '# Readme draft', isDirty: true });
     await select('docs/First.md');
@@ -4159,7 +4650,7 @@ describe('Folder Creation and Files in Workbench', () => {
     await canvas.get('textarea').setValue('# New draft');
     const { baseMtimeMs, baseSize } = canvas.props('file');
     disk = { content: '# Text changed on disk', mtimeMs: 300, size: 22 };
-    await reopened.get(`[aria-label="${t('creation.workbench.refresh')}"]`).trigger('click');
+    await openOverflowAction(reopened, t('creation.workbench.refresh'));
     await flushPromises();
     expect(reads()).toHaveLength(3);
     expect(canvas.props('file')).toMatchObject({ diskChangedOnDisk: true, baseMtimeMs, baseSize,
@@ -4254,7 +4745,7 @@ describe('Folder Creation and Files in Workbench', () => {
     await expectBinaryDraftConflict(canvas, 'Second draft');
 
     secondDisk = { error: 'Permission denied', content: '' };
-    await reopened.get(`[aria-label="${t('creation.workbench.refresh')}"]`).trigger('click');
+    await openOverflowAction(reopened, t('creation.workbench.refresh'));
     await flushPromises();
     expect(reads()).toEqual([first, second, first, second, second]);
     expect(canvas.props('file')).toMatchObject({ diskChangedToBinary: true, isDirty: true, content: 'Second draft' });
@@ -4601,11 +5092,11 @@ describe('Folder Creation and Files in Workbench', () => {
     const selection = () => wrapper.getComponent(FileCanvasView).props('file');
     expect(selection()).toMatchObject({ path: `${rootDir}/${initial}`, fileType: kind });
     files.unshift({ name: added, type: 'file' });
-    await wrapper.get(`[aria-label="${t('creation.workbench.refresh')}"]`).trigger('click');
+    await openOverflowAction(wrapper, t('creation.workbench.refresh'));
     await flushPromises();
     const filesAfterScan = kind === 'image' ? wrapper.vm.imageFiles : wrapper.vm.videoFiles;
     expect(filesAfterScan.map(item => item.path)).toEqual([`${rootDir}/${added}`, `${rootDir}/${initial}`]);
-    expect(wrapper.get('.creation-wb-media-counter').text()).toBe('2 / 2');
+    expect(wrapper.get('.creation-wb-media-detail .canvas-media-nav-inline .canvas-zoom-readout').text()).toBe('2 / 2');
     expect(selection()).toMatchObject({ path: `${rootDir}/${initial}`, fileType: kind });
   });
 
@@ -4725,7 +5216,7 @@ describe('Folder Creation and Files in Workbench', () => {
     window.addEventListener('workbench-open-capability', openFiles);
     window.addEventListener('workbench-files-open-dir', openDir);
     try {
-      await wrapper.get(`.creation-wb-header-actions button[title="${t('creation.workbench.openInFiles')}"]`).trigger('click');
+      await openOverflowAction(wrapper, t('creation.workbench.openInFiles'));
       expect(openFiles.mock.calls[0][0].detail).toEqual({ routeKey, capabilityId: 'files' });
       expect(openDir.mock.calls[0][0].detail).toEqual({ routeKey, agentId: route.agentId, dirPath: rootDir, workspaceGeneration: routeProps.workspaceGeneration });
     } finally {

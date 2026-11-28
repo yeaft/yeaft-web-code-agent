@@ -11,7 +11,15 @@ const OPS = new Set([
   'add_sources', 'get_source', 'delete_source', 'upsert_canon', 'get_canon', 'delete_canon',
   'create_node', 'get_node', 'update_node', 'reorder_nodes', 'delete_node', 'restore_revision',
   'list_proposals', 'get_proposal', 'resolve_proposal', 'get_thread', 'send_message', 'start_batch_run', 'control_run', 'export_creation',
+  'inline_edit', 'review_document', 'cancel_ai_job', 'get_doc_states', 'set_doc_state', 'get_doc_review', 'update_review_annotation',
 ]);
+const clientRelayIds = new WeakMap();
+export function getClientRelayId(client) {
+  let id = clientRelayIds.get(client);
+  if (!id) clientRelayIds.set(client, id = randomUUID());
+  return id;
+}
+
 const UPLOAD_OPS = new Set(['create_creation', 'add_sources', 'send_message']);
 const MAX_PENDING_PER_CLIENT = 32;
 const MAX_PENDING = 1024;
@@ -131,7 +139,7 @@ export function createCreationRelay({
         if (entries.length) payload.files = entries.map(({ name, mimeType, buffer }) => ({
           name, mimeType, data: buffer.toString('base64'), size: buffer.length,
         }));
-        sent = await forward(agent, { type: 'creation_request', requestId: serverRequestId, op, payload, ownerId });
+        sent = await forward(agent, { type: 'creation_request', requestId: serverRequestId, op, payload, ownerId, targetClientId: getClientRelayId(client) });
       } catch {
         // A thrown transport error does not prove a mutation was never delivered.
         if (forget(serverRequestId) && active(client)) await reject('outcome_unknown', 'Agent delivery could not be confirmed; refresh before retrying');

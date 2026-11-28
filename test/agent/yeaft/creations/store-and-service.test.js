@@ -2319,3 +2319,98 @@ describe('Creation-scoped Workbench files', () => {
     }
   });
 });
+
+describe('Creation categories and document review workflow', () => {
+  it('derives kinds for new categories and infers legacy categories without a write', () => {
+    const { creation } = req('create_creation', { category: 'media' });
+    expect(creation).toMatchObject({ kind: 'video', modality: 'video_episode', category: 'media' });
+    const { id } = store.createCreation({ kind: 'gallery' });
+    store.run("UPDATE creations SET data=json_remove(data,'$.category') WHERE id=?", id);
+    expect(store.getCreation(id).category).toBe('media');
+    expect(store.listCreations().find(item => item.id === id).category).toBe('media');
+    expect(JSON.parse(store.one('SELECT data FROM creations WHERE id=?', id).data)).not.toHaveProperty('category');
+    expect(req('update_creation', { creationId: id, category: 'article' }).creation).toMatchObject({ kind: 'gallery', category: 'article' });
+    expect(() => req('update_creation', { creationId: id, category: 'constructor' })).toThrow(err('INVALID_REQUEST'));
+    expect(() => store.createCreation({ category: 'unknown' })).toThrow(err('INVALID_REQUEST'));
+    expect(store.createCreation({ category: 'deck' })).toMatchObject({ kind: 'deck', category: 'deck' });
+  });
+
+  it('normalizes paths, counts open comments, and cascades stored workflow on deletion', () => {
+    const { id } = store.createCreation({});
+    const creationId = id;
+    const filePath = 'docs/chapter.md';
+    expect(req('get_doc_states', { creationId })).toEqual({ states: {} });
+    expect(req('get_doc_review', { creationId, filePath })).toEqual({ review: null });
+    expect(req('set_doc_state', { creationId, filePath: './docs\\chapter.md', status: 'draft' }))
+      .toEqual({ filePath, status: 'draft', updatedAt: expect.any(String) });
+    store.setDocState(id, '__proto__', 'final');
+    const annotation = { id: 'a', status: 'open' };
+    store.saveDocReview(id, `/./${filePath}`, { annotations: [annotation, { id: 'b', status: 'dismissed' }], lensResults: [{ annotations: [annotation] }] });
+    expect(req('get_doc_states', { creationId }).states[filePath]).toMatchObject({ status: 'draft', openReviewCount: 1 });
+    expect(Object.hasOwn(store.listDocStates(id), '__proto__')).toBe(true);
+    expect(req('update_review_annotation', { creationId, filePath, annotationId: 'a', status: 'accepted' }).review.lensResults[0].annotations[0].status).toBe('accepted');
+    expect(req('get_doc_states', { creationId }).states[filePath].openReviewCount).toBe(0);
+    expect(() => store.updateDocReviewAnnotation(id, filePath, 'missing', 'accepted')).toThrow(err('NOT_FOUND'));
+    expect(() => store.updateDocReviewAnnotation(id, 'missing.md', 'a', 'accepted')).toThrow(err('NOT_FOUND'));
+    expect(() => store.updateDocReviewAnnotation(id, filePath, 'a', 'final')).toThrow(err('INVALID_REQUEST'));
+    expect(() => store.setDocState(id, filePath, 'active')).toThrow(err('INVALID_REQUEST'));
+    for (const unsafePath of ['', '/./', 'here/../there', 'here/./there', 'a\0b', 'a\u0085b', '🌟'.repeat(257)]) {
+      expect(() => store.getDocReview(id, unsafePath)).toThrow(err('INVALID_REQUEST'));
+    }
+    expect(() => store.saveDocReview(id, filePath, { text: 'x'.repeat(512 * 1024) })).toThrow(err('LIMIT_EXCEEDED'));
+    expect(() => store.listDocStates('unknown')).toThrow(err('NOT_FOUND'));
+    req('delete_creation', { creationId });
+    for (const table of ['creation_doc_states', 'creation_doc_reviews']) {
+      expect(store.one(`SELECT COUNT(*) AS count FROM ${table} WHERE creation_id=?`, creationId).count).toBe(0);
+    }
+  });
+
+  it('acknowledges bridge jobs without blocking, protects private events, and broadcasts only durable review changes', async () => {
+    const sent = [];
+    let runtime;
+    let finish;
+    const call = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+    const bridge = createCreationBridge({ context: { CONFIG: { yeaftDir: dir, serverUrl: 'wss://reviews.example' }, agentId: 'agent:1' },
+      send: message => sent.push(message), createService: options => runtime = createCreationService({ ...options, adapterFactory: () => ({ adapter: { call } }) }) });
+    let sequence = 0;
+    const request = async (op, payload, targetClientId = 'tab-a') => {
+      const requestId = `req-${++sequence}`;
+      await bridge.request({ type: 'creation_request', requestId, op, payload, targetClientId, ownerId: 'owner' });
+      return sent.find(message => message.requestId === requestId);
+    };
+    try {
+      const created = await request('create_creation', { category: 'article' });
+      const creationId = created.data.creation.id;
+      const filePath = 'doc.md';
+      const path = { creationId, filePath };
+      const content = 'Line one\nLine two';
+      const started = await request('review_document', { ...path, content, lensIds: ['chief_editor'], targetClientId: 'tab-b' });
+      expect(started).toMatchObject({ ok: true, data: { status: 'running', category: 'article' } });
+      const { jobId } = started.data;
+      const done = runtime.aiAssistant.waitForJob(jobId);
+      expect(runtime.hasActiveWork()).toBe(true);
+      expect(await request('get_doc_states', path, 'tab-b')).toMatchObject({ ok: true, data: { states: {} } });
+      expect(await request('cancel_ai_job', { jobId }, 'tab-b')).toMatchObject({ ok: false, errorCode: 'not_found' });
+      await vi.waitFor(() => expect(call).toHaveBeenCalledTimes(1));
+      finish({ text: JSON.stringify({ summary: 'Finding', annotations: [{ quote: 'Line two', severity: 'blocker' }] }) });
+      const result = await done;
+      const jobEvents = sent.filter(message => message.event?.jobId === jobId);
+      expect(jobEvents.map(message => message.event.type)).toEqual(['review_lens_complete', 'review_complete']);
+      expect(jobEvents.every(message => message.targetClientId === 'tab-a' && !Object.hasOwn(message.event, '_targetClientId'))).toBe(true);
+      const durable = sent.filter(message => message.event?.type.startsWith('doc_'));
+      expect(durable.map(message => message.event.type)).toEqual(['doc_review_updated', 'doc_state_updated']);
+      expect(durable.every(message => message.ownerId === 'owner' && !Object.hasOwn(message, 'targetClientId'))).toBe(true);
+      expect(await request('get_doc_review', path)).toMatchObject({ ok: true, data: { review: result } });
+      expect(runtime.store.listDocStates(creationId)[filePath]).toMatchObject({ status: 'review', openReviewCount: 1 });
+      await request('set_doc_state', { ...path, status: 'final' });
+      const rerun = await request('review_document', { ...path, content, customPrompt: 'review one' });
+      const rerunDone = runtime.aiAssistant.waitForJob(rerun.data.jobId);
+      await vi.waitFor(() => expect(call).toHaveBeenCalledTimes(2));
+      finish({ text: '{"summary":"fine","annotations":[]}' });
+      expect(await rerunDone).toMatchObject({ status: 'completed' });
+      expect(runtime.store.listDocStates(creationId)[filePath]).toMatchObject({ status: 'final', openReviewCount: 0 });
+      expect(sent.filter(message => message.event?.type === 'doc_state_updated')).toHaveLength(2);
+      expect(runtime.store.listRuns(creationId)).toHaveLength(0);
+    } finally { await bridge.close(); }
+  });
+});

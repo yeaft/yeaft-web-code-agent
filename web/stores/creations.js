@@ -10,6 +10,7 @@ import { useAuthStore } from './auth.js';
 import { yeaftSessionIdentityKey } from './helpers/yeaft-session-identity.js';
 import { hasBufferedLiveYeaftSession } from './helpers/messageHandler.js';
 import { workbenchRouteKey, workbenchWorkspaceGeneration } from '../utils/workbench-route.js';
+import { defaultKindForCategory } from '../utils/creation-categories.js';
 import * as canvasContext from '../utils/canvas-context.js';
 
 const { defineStore } = Pinia;
@@ -192,6 +193,15 @@ export function creationThreadKey(agentId, creationId, threadId) {
   return `${agentId}${KEY_SEP}${creationId}${KEY_SEP}${threadId}`;
 }
 
+export function creationDocReviewKey(agentId, creationId, relPath) {
+  return `${agentId}${KEY_SEP}${creationId}${KEY_SEP}${relPath}`;
+}
+
+function countOpenReviewAnnotations(review) {
+  const annotations = Array.isArray(review?.annotations) ? review.annotations : [];
+  return annotations.filter((a) => a && (!a.status || a.status === 'open')).length;
+}
+
 function emptyAgentBucket() {
   return { list: [], loaded: false, loading: false, error: null };
 }
@@ -324,6 +334,10 @@ export const useCreationsStore = defineStore('creations', {
     detailsByKey: {},
     nodeContentsByKey: {},
     threadMessagesByKey: {},
+    docStatesByKey: {},
+    docReviewsByKey: {},
+    inlineEditJobs: {},
+    reviewJobs: {},
     activeCreation: null,
     inspectorTarget: null,
     viewMode: 'galaxy',
@@ -815,7 +829,8 @@ export const useCreationsStore = defineStore('creations', {
 
     async createCreationWithWorkspace(options = {}) {
       const targetId = String(options.agentId || this.selectedAgentId || '').trim();
-      const { attemptKey, title, kind = 'book', rawFiles } = options;
+      const { attemptKey, title, category = '', rawFiles } = options;
+      const kind = options.kind || (category ? defaultKindForCategory(category) : 'book');
       const trimmedTitle = String(title || '').trim();
       const flightKey = typeof attemptKey === 'string' && attemptKey.trim() ? `${targetId}::${attemptKey}` : null;
       const gen = storeGeneration;
@@ -826,6 +841,7 @@ export const useCreationsStore = defineStore('creations', {
         const patch = {
           ...(trimmedTitle && trimmedTitle !== baseRes.creation.title ? { title: trimmedTitle } : {}),
           ...(kind !== baseRes.creation.kind ? { kind } : {}),
+          ...(category && category !== baseRes.creation.category ? { category } : {}),
         };
         const updated = Object.keys(patch).length
           ? await this.updateCreation(targetId, baseRes.creation.id, patch) : null;
@@ -842,7 +858,7 @@ export const useCreationsStore = defineStore('creations', {
       // Reserve the attempt before issuing any RPC; remounts reuse this promise.
       entry.promise = Promise.resolve().then(() => {
         if (gen !== storeGeneration) throw new Error('Creations store cleared');
-        return this._createWorkspace(targetId, { ...options, rawFiles: filesAtStart });
+        return this._createWorkspace(targetId, { ...options, kind, category, rawFiles: filesAtStart });
       }).then(result => {
         entry.submittedFiles = result._submittedSnapshot.files;
         return result;
@@ -856,6 +872,7 @@ export const useCreationsStore = defineStore('creations', {
     async _createWorkspace(targetId, {
       title,
       kind = 'book',
+      category = '',
       projectId = null,
       newProjectName = '',
       sessionMode = 'new',
@@ -974,6 +991,7 @@ export const useCreationsStore = defineStore('creations', {
           createRes = await this.createCreation(targetId, {
             ...(trimmedTitle ? { title: trimmedTitle } : {}),
             kind,
+            ...(category ? { category } : {}),
             mission: prompt || '',
             prompt: prompt || '',
             ...(trimmedRootDir ? { rootDir: trimmedRootDir } : {}),
@@ -1118,6 +1136,7 @@ export const useCreationsStore = defineStore('creations', {
           projectId: appliedProjectId,
           ...(isResumedOrDeduplicated && trimmedTitle && trimmedTitle !== created.title ? { title: trimmedTitle } : {}),
           ...(isResumedOrDeduplicated && kind && kind !== created.kind ? { kind } : {}),
+          ...(isResumedOrDeduplicated && category && category !== created.category ? { category } : {}),
         });
         ensureSameStore();
         if (!updated?.id) {
@@ -1133,7 +1152,7 @@ export const useCreationsStore = defineStore('creations', {
           rootDir: updated?.rootDir || created.rootDir || trimmedRootDir || '',
           prompt,
           _submittedSnapshot: {
-            files: uploadedFilesThisCall, title: trimmedTitle, prompt: String(prompt || ''), kind, celestial: celestial || null,
+            files: uploadedFilesThisCall, title: trimmedTitle, prompt: String(prompt || ''), kind, category: category || '', celestial: celestial || null,
           },
         };
       } catch (err) {
@@ -1540,6 +1559,7 @@ export const useCreationsStore = defineStore('creations', {
 
       const reqPayload = {
         ...rest,
+        ...(!rest.kind && rest.category ? { kind: defaultKindForCategory(rest.category) } : {}),
         ...(attachments.length ? { attachments } : {}),
       };
 
@@ -1728,9 +1748,11 @@ export const useCreationsStore = defineStore('creations', {
       }
       const dKey = creationDetailKey(agentId, creationId);
       delete this.detailsByKey[dKey];
+      delete this.docStatesByKey[dKey];
       const prefix = `${dKey}${KEY_SEP}`;
       deleteKeysWithPrefix(this.nodeContentsByKey, prefix);
       deleteKeysWithPrefix(this.threadMessagesByKey, prefix);
+      deleteKeysWithPrefix(this.docReviewsByKey, prefix);
 
       if (this.activeCreation?.agentId === agentId && this.activeCreation?.creationId === creationId) {
         this.activeCreation = null;
@@ -2278,6 +2300,179 @@ export const useCreationsStore = defineStore('creations', {
       return this.request(agentId, 'export_creation', { creationId, format });
     },
 
+    async startInlineEdit(agentId, payload = {}) {
+      const targetId = String(agentId || this.selectedAgentId || '').trim();
+      const gen = storeGeneration;
+      const data = await this.request(targetId, 'inline_edit', payload);
+      if (gen !== storeGeneration) return data;
+      const jobId = data?.jobId;
+      if (jobId) {
+        const existing = this.inlineEditJobs[jobId];
+        this.inlineEditJobs[jobId] = {
+          jobId,
+          agentId: targetId,
+          creationId: payload?.creationId || existing?.creationId || '',
+          filePath: payload?.filePath || existing?.filePath || '',
+          status: existing && existing.status !== 'running' ? existing.status : (data.status || 'running'),
+          originalText: existing?.originalText || payload?.selectedText || '',
+          revisedText: existing?.revisedText || '',
+          diffHunks: Array.isArray(existing?.diffHunks) ? existing.diffHunks : [],
+          error: existing?.error ?? null,
+        };
+      }
+      return data;
+    },
+
+    async startDocumentReview(agentId, payload = {}) {
+      const targetId = String(agentId || this.selectedAgentId || '').trim();
+      const gen = storeGeneration;
+      const data = await this.request(targetId, 'review_document', payload);
+      if (gen !== storeGeneration) return data;
+      const jobId = data?.jobId;
+      if (jobId) {
+        const existing = this.reviewJobs[jobId];
+        this.reviewJobs[jobId] = {
+          jobId,
+          agentId: targetId,
+          creationId: payload?.creationId || existing?.creationId || '',
+          filePath: payload?.filePath || existing?.filePath || '',
+          scope: data?.scope || payload?.scope || existing?.scope || 'document',
+          category: data?.category || payload?.category || existing?.category || '',
+          status: existing && existing.status !== 'running' ? existing.status : (data.status || 'running'),
+          lenses: Array.isArray(data?.lenses) ? data.lenses : (Array.isArray(existing?.lenses) ? existing.lenses : []),
+          lensResults: Array.isArray(existing?.lensResults) ? existing.lensResults : [],
+          annotations: Array.isArray(existing?.annotations) ? existing.annotations : [],
+          overallSummary: existing?.overallSummary || '',
+          contentHash: existing?.contentHash || '',
+          error: existing?.error ?? null,
+        };
+      }
+      return data;
+    },
+
+    async cancelAiJob(agentId, jobId) {
+      if (!jobId) return null;
+      if (this.inlineEditJobs[jobId]?.status === 'running') {
+        this.inlineEditJobs[jobId] = { ...this.inlineEditJobs[jobId], status: 'cancelled' };
+      }
+      if (this.reviewJobs[jobId]?.status === 'running') {
+        this.reviewJobs[jobId] = { ...this.reviewJobs[jobId], status: 'cancelled' };
+      }
+      const targetId = String(agentId || this.selectedAgentId || '').trim();
+      if (!targetId) return null;
+      return this.request(targetId, 'cancel_ai_job', { jobId });
+    },
+
+    clearAiJob(jobId) {
+      if (!jobId) return;
+      delete this.inlineEditJobs[jobId];
+      delete this.reviewJobs[jobId];
+    },
+
+    async loadDocStates(agentId, creationId) {
+      const targetId = String(agentId || this.selectedAgentId || '').trim();
+      if (!targetId || !creationId) return {};
+      const gen = storeGeneration;
+      const data = await this.request(targetId, 'get_doc_states', { creationId });
+      if (gen !== storeGeneration) return {};
+      const states = data?.states && typeof data.states === 'object' ? { ...data.states } : {};
+      this.docStatesByKey[creationDetailKey(targetId, creationId)] = states;
+      return states;
+    },
+
+    getDocState(agentId, creationId, filePath) {
+      if (!agentId || !creationId || !filePath) return null;
+      const bucket = this.docStatesByKey[creationDetailKey(agentId, creationId)];
+      if (!bucket || !Object.hasOwn(bucket, filePath)) return null;
+      return bucket[filePath] || null;
+    },
+
+    async setDocState(agentId, creationId, filePath, status) {
+      const targetId = String(agentId || this.selectedAgentId || '').trim();
+      if (!targetId || !creationId || !filePath) throw new Error('Missing agentId, creationId, or filePath');
+      const gen = storeGeneration;
+      const data = await this.request(targetId, 'set_doc_state', { creationId, filePath, status });
+      if (gen !== storeGeneration) return data;
+      const dKey = creationDetailKey(targetId, creationId);
+      const prevBucket = this.docStatesByKey[dKey] || {};
+      const prevEntry = prevBucket[filePath] || {};
+      const nextEntry = data?.docState && typeof data.docState === 'object'
+        ? { ...prevEntry, ...data.docState }
+        : { ...prevEntry, status, updatedAt: data?.updatedAt || Date.now() };
+      this.docStatesByKey[dKey] = { ...prevBucket, [filePath]: nextEntry };
+      return data;
+    },
+
+    async loadDocReview(agentId, creationId, filePath) {
+      const targetId = String(agentId || this.selectedAgentId || '').trim();
+      if (!targetId || !creationId || !filePath) return null;
+      const gen = storeGeneration;
+      const data = await this.request(targetId, 'get_doc_review', { creationId, filePath });
+      if (gen !== storeGeneration) return data;
+      const rKey = creationDocReviewKey(targetId, creationId, filePath);
+      if (data?.review) {
+        this.docReviewsByKey[rKey] = data.review;
+      } else {
+        delete this.docReviewsByKey[rKey];
+      }
+      if (data?.docState && typeof data.docState === 'object') {
+        const dKey = creationDetailKey(targetId, creationId);
+        const prevBucket = this.docStatesByKey[dKey] || {};
+        this.docStatesByKey[dKey] = {
+          ...prevBucket,
+          [filePath]: { ...(prevBucket[filePath] || {}), ...data.docState },
+        };
+      }
+      return data;
+    },
+
+    getDocReview(agentId, creationId, filePath) {
+      if (!agentId || !creationId || !filePath) return null;
+      return this.docReviewsByKey[creationDocReviewKey(agentId, creationId, filePath)] || null;
+    },
+
+    async resolveReviewAnnotation(agentId, creationId, filePath, annotationId, status) {
+      const targetId = String(agentId || this.selectedAgentId || '').trim();
+      if (!targetId || !creationId || !filePath || !annotationId) {
+        throw new Error('Missing agentId, creationId, filePath, or annotationId');
+      }
+      const gen = storeGeneration;
+      const data = await this.request(targetId, 'update_review_annotation', {
+        creationId,
+        filePath,
+        annotationId,
+        status,
+      });
+      if (gen !== storeGeneration) return data;
+      const rKey = creationDocReviewKey(targetId, creationId, filePath);
+      let nextReview = data?.review || null;
+      if (!nextReview && this.docReviewsByKey[rKey]) {
+        const prev = this.docReviewsByKey[rKey];
+        const nextAnns = Array.isArray(prev.annotations)
+          ? prev.annotations.map((ann) => (ann && ann.id === annotationId ? { ...ann, status } : ann))
+          : [];
+        nextReview = { ...prev, annotations: nextAnns };
+      }
+      if (nextReview) {
+        this.docReviewsByKey[rKey] = nextReview;
+      }
+      const dKey = creationDetailKey(targetId, creationId);
+      const prevBucket = this.docStatesByKey[dKey] || {};
+      const prevEntry = prevBucket[filePath] || {};
+      const openReviewCount = typeof data?.docState?.openReviewCount === 'number'
+        ? data.docState.openReviewCount
+        : (nextReview ? countOpenReviewAnnotations(nextReview) : (prevEntry.openReviewCount || 0));
+      this.docStatesByKey[dKey] = {
+        ...prevBucket,
+        [filePath]: {
+          ...prevEntry,
+          ...(data?.docState && typeof data.docState === 'object' ? data.docState : {}),
+          openReviewCount,
+        },
+      };
+      return data;
+    },
+
     mediaUrl(agentId, creationId, mediaKind, mediaId) {
       if (!agentId || !creationId || !mediaKind || !mediaId) return '';
       return `/api/yeaft/creations/${encodeURIComponent(agentId)}/${encodeURIComponent(creationId)}/media/${encodeURIComponent(mediaKind)}/${encodeURIComponent(mediaId)}`;
@@ -2652,6 +2847,228 @@ export const useCreationsStore = defineStore('creations', {
           break;
         }
 
+        case 'inline_edit_delta': {
+          const jobId = payload.jobId || msg.jobId;
+          if (!jobId) return;
+          const prev = this.inlineEditJobs[jobId] || {
+            jobId,
+            agentId,
+            creationId: creationId || '',
+            filePath: payload.filePath || '',
+            status: 'running',
+            originalText: payload.originalText || '',
+            revisedText: '',
+            diffHunks: [],
+            error: null,
+          };
+          if (prev.agentId && prev.agentId !== agentId) return;
+          const delta = typeof payload.delta === 'string' ? payload.delta : '';
+          this.inlineEditJobs[jobId] = {
+            ...prev,
+            revisedText: `${prev.revisedText || ''}${delta}`,
+          };
+          break;
+        }
+
+        case 'inline_edit_complete': {
+          const jobId = payload.jobId || msg.jobId;
+          if (!jobId) return;
+          const prev = this.inlineEditJobs[jobId] || {
+            jobId,
+            agentId,
+            creationId: creationId || '',
+            filePath: payload.filePath || '',
+            status: 'running',
+            originalText: '',
+            revisedText: '',
+            diffHunks: [],
+            error: null,
+          };
+          if (prev.agentId && prev.agentId !== agentId) return;
+          this.inlineEditJobs[jobId] = {
+            ...prev,
+            status: payload.status || (payload.error ? 'failed' : 'completed'),
+            originalText: payload.originalText !== undefined ? payload.originalText : prev.originalText,
+            revisedText: payload.revisedText !== undefined ? payload.revisedText : prev.revisedText,
+            diffHunks: Array.isArray(payload.diffHunks) ? payload.diffHunks : prev.diffHunks,
+            error: payload.error ?? null,
+          };
+          break;
+        }
+
+        case 'review_lens_complete': {
+          const jobId = payload.jobId || msg.jobId;
+          if (!jobId) return;
+          const prev = this.reviewJobs[jobId] || {
+            jobId,
+            agentId,
+            creationId: creationId || '',
+            filePath: payload.filePath || '',
+            scope: payload.scope || 'document',
+            category: payload.category || '',
+            status: 'running',
+            lenses: [],
+            lensResults: [],
+            annotations: [],
+            overallSummary: '',
+            contentHash: '',
+            error: null,
+          };
+          if (prev.agentId && prev.agentId !== agentId) return;
+          const lensId = payload.lensId || payload.lensResult?.lensId;
+          const lensResult = payload.lensResult || (lensId ? {
+            lensId,
+            status: payload.status || (payload.error ? 'failed' : 'completed'),
+            summary: payload.summary || '',
+            error: payload.error ?? null,
+            annotationCount: Array.isArray(payload.annotations) ? payload.annotations.length : 0,
+          } : null);
+          const nextLensResults = prev.lensResults.slice();
+          if (lensResult && lensResult.lensId) {
+            const idx = nextLensResults.findIndex((r) => r && r.lensId === lensResult.lensId);
+            if (idx >= 0) nextLensResults[idx] = { ...nextLensResults[idx], ...lensResult };
+            else nextLensResults.push(lensResult);
+          }
+          const incomingAnns = Array.isArray(payload.annotations) ? payload.annotations : [];
+          let nextAnns = prev.annotations.slice();
+          if (lensId && incomingAnns.length > 0) {
+            nextAnns = nextAnns.filter((a) => a && a.lensId !== lensId);
+            nextAnns.push(...incomingAnns);
+          } else if (incomingAnns.length > 0) {
+            for (const ann of incomingAnns) {
+              nextAnns = upsertById(nextAnns, ann);
+            }
+          }
+          this.reviewJobs[jobId] = {
+            ...prev,
+            lensResults: nextLensResults,
+            annotations: nextAnns,
+          };
+          break;
+        }
+
+        case 'review_complete': {
+          const jobId = payload.jobId || msg.jobId;
+          if (!jobId) return;
+          const prev = this.reviewJobs[jobId] || {
+            jobId,
+            agentId,
+            creationId: creationId || '',
+            filePath: payload.filePath || '',
+            scope: payload.scope || 'document',
+            category: payload.category || '',
+            status: 'running',
+            lenses: [],
+            lensResults: [],
+            annotations: [],
+            overallSummary: '',
+            contentHash: '',
+            error: null,
+          };
+          if (prev.agentId && prev.agentId !== agentId) return;
+          const nextStatus = payload.status || (payload.error ? 'failed' : 'completed');
+          const nextJob = {
+            ...prev,
+            creationId: creationId || prev.creationId,
+            filePath: payload.filePath || prev.filePath,
+            scope: payload.scope || prev.scope,
+            category: payload.category || prev.category,
+            status: nextStatus,
+            overallSummary: payload.overallSummary !== undefined ? payload.overallSummary : prev.overallSummary,
+            lensResults: Array.isArray(payload.lensResults) ? payload.lensResults : prev.lensResults,
+            annotations: Array.isArray(payload.annotations) ? payload.annotations : prev.annotations,
+            contentHash: payload.contentHash !== undefined ? payload.contentHash : prev.contentHash,
+            error: payload.error ?? null,
+          };
+          this.reviewJobs[jobId] = nextJob;
+
+          if (
+            nextJob.creationId
+            && nextJob.filePath
+            && nextJob.scope === 'document'
+            && nextStatus !== 'failed'
+            && nextStatus !== 'cancelled'
+          ) {
+            const rKey = creationDocReviewKey(agentId, nextJob.creationId, nextJob.filePath);
+            const reviewRecord = payload.review || {
+              jobId,
+              creationId: nextJob.creationId,
+              filePath: nextJob.filePath,
+              scope: nextJob.scope,
+              category: nextJob.category,
+              status: nextStatus,
+              overallSummary: nextJob.overallSummary,
+              lensResults: nextJob.lensResults,
+              annotations: nextJob.annotations,
+              contentHash: nextJob.contentHash,
+              updatedAt: payload.updatedAt || Date.now(),
+            };
+            this.docReviewsByKey[rKey] = reviewRecord;
+            const dKey = creationDetailKey(agentId, nextJob.creationId);
+            const prevBucket = this.docStatesByKey[dKey] || {};
+            this.docStatesByKey[dKey] = {
+              ...prevBucket,
+              [nextJob.filePath]: {
+                ...(prevBucket[nextJob.filePath] || {}),
+                openReviewCount: countOpenReviewAnnotations(reviewRecord),
+              },
+            };
+          }
+          break;
+        }
+
+        case 'doc_state_updated': {
+          const relPath = payload.filePath;
+          if (!creationId || !relPath) return;
+          const dKey = creationDetailKey(agentId, creationId);
+          const prevBucket = this.docStatesByKey[dKey] || {};
+          const prevEntry = prevBucket[relPath] || {};
+          const patch = payload.docState && typeof payload.docState === 'object'
+            ? payload.docState
+            : {
+                ...(payload.status !== undefined ? { status: payload.status } : {}),
+                ...(payload.updatedAt !== undefined ? { updatedAt: payload.updatedAt } : {}),
+                ...(payload.openReviewCount !== undefined ? { openReviewCount: payload.openReviewCount } : {}),
+              };
+          this.docStatesByKey[dKey] = {
+            ...prevBucket,
+            [relPath]: { ...prevEntry, ...patch },
+          };
+          break;
+        }
+
+        case 'doc_review_updated': {
+          const relPath = payload.filePath;
+          if (!creationId || !relPath) return;
+          const rKey = creationDocReviewKey(agentId, creationId, relPath);
+          let nextReview = payload.review || null;
+          if (!nextReview && payload.annotationId && this.docReviewsByKey[rKey]) {
+            const prev = this.docReviewsByKey[rKey];
+            const nextAnns = Array.isArray(prev.annotations)
+              ? prev.annotations.map((ann) => (
+                  ann && ann.id === payload.annotationId
+                    ? { ...ann, status: payload.status || ann.status }
+                    : ann
+                ))
+              : [];
+            nextReview = { ...prev, annotations: nextAnns };
+          }
+          if (nextReview) {
+            this.docReviewsByKey[rKey] = nextReview;
+          }
+          const dKey = creationDetailKey(agentId, creationId);
+          const prevBucket = this.docStatesByKey[dKey] || {};
+          const prevEntry = prevBucket[relPath] || {};
+          const openReviewCount = typeof payload.openReviewCount === 'number'
+            ? payload.openReviewCount
+            : (nextReview ? countOpenReviewAnnotations(nextReview) : (prevEntry.openReviewCount || 0));
+          this.docStatesByKey[dKey] = {
+            ...prevBucket,
+            [relPath]: { ...prevEntry, openReviewCount },
+          };
+          break;
+        }
+
         default:
           break;
       }
@@ -2765,6 +3182,10 @@ export const useCreationsStore = defineStore('creations', {
       this.detailsByKey = {};
       this.nodeContentsByKey = {};
       this.threadMessagesByKey = {};
+      this.docStatesByKey = {};
+      this.docReviewsByKey = {};
+      this.inlineEditJobs = {};
+      this.reviewJobs = {};
       this.activeCreation = null;
       this.inspectorTarget = null;
       this.pendingWorkbenchTarget = null;

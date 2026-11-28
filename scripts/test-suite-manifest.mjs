@@ -17,6 +17,7 @@ export const CORE_TEST_FILES = Object.freeze([
   "test/agent/yeaft/decision-runner.test.js",
   "test/agent/yeaft/engine.test.js",
   "test/agent/yeaft/context-rollover.test.js",
+  "test/agent/yeaft/creations/ai-assistant.test.js",
   "test/agent/yeaft/creations/runner-and-tools.test.js",
   "test/agent/yeaft/creations/store-and-service.test.js",
   "test/agent/yeaft/gemini-adapter.test.js",
