@@ -2954,12 +2954,25 @@ describe('2.0 graph and AI contracts', () => {
     expect(performance.now() - tForeign0).toBeLessThan(600);
     expect(bombItems).toHaveLength(3);
     expect(bombItems[0].summaryExcerpt).toBe('Safe tail');
-    const deepBqHtml = `<article>${'<blockquote>'.repeat(100)}${'<p>Quoted line</p>'.repeat(3000)}${'</blockquote>'.repeat(100)}</article>`;
+    const deepBqHtml = `<article>${'<blockquote>'.repeat(120)}${'<p>Quoted line text</p>'.repeat(11_000)}${'</blockquote>'.repeat(120)}</article>`;
     const tDeepBq0 = performance.now();
     const deepBqArt = extractCleanArticle(deepBqHtml, 'https://private.example/bq');
-    expect(performance.now() - tDeepBq0).toBeLessThan(1500);
+    expect(performance.now() - tDeepBq0).toBeLessThan(600);
+    expect(deepBqArt.markdown).toHaveLength(40_000);
+    expect(deepBqArt.truncated).toBe(true);
     expect(deepBqArt.aiMarkdown.length).toBeLessThanOrEqual(40_000);
     expect(deepBqArt.aiMarkdown).toContain('> >');
+    // Multiline <pre> inside 120-deep blockquote expands prefixes incrementally within budget + both nesting directions preserve prefix order
+    const preBqHtml = `<article>${'<blockquote>'.repeat(120)}<pre>${'line\n'.repeat(50_000)}</pre>${'</blockquote>'.repeat(120)}</article>`;
+    const tPreBq0 = performance.now();
+    const preBqArt = extractCleanArticle(preBqHtml, 'https://private.example/prebq');
+    expect(performance.now() - tPreBq0).toBeLessThan(400);
+    expect(preBqArt.markdown).toHaveLength(40_000);
+    expect(preBqArt.aiMarkdown.length).toBeLessThanOrEqual(40_000);
+    expect(extractCleanArticle('<article><ul><li><blockquote><p>L1</p><p>L2</p></blockquote></li></ul></article>', 'https://example.com').markdown)
+      .toContain('- > L1\n  > ');
+    expect(extractCleanArticle('<article><blockquote><ul><li>Item 1<br>cont</li></ul></blockquote></article>', 'https://example.com').markdown)
+      .toContain('> - Item 1\n>   cont');
 
     // Mixed public/private dailyBriefing carries per-story isPrivateSource: true on private stories (enabling Agent defense-in-depth) while keeping public stories clean.
     const mixedDailyReqAi = vi.fn(async () => dailyResult);
