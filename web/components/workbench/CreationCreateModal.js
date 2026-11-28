@@ -856,6 +856,9 @@ export default {
         state.sessionId = err?.partialSessionId || state.sessionId;
         if (state.creationId) {
           state.workspaceCreateOutcome = 'committed';
+        } else if (state.workspaceCreateOutcome === 'ambiguous') {
+          // Retain prior unresolved ambiguity until reconciled with a committed creationId.
+          state.workspaceCreateOutcome = 'ambiguous';
         } else if (err?.workspaceCreateOutcome) {
           state.workspaceCreateOutcome = err.workspaceCreateOutcome;
         } else if (err?.createAttempted === true) {

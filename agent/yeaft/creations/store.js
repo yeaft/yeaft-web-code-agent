@@ -708,7 +708,12 @@ export class CreationStore {
       const previousRoot = record.rootDir ?? null;
       this.#creationFields(record, patch);
       if (own(patch, 'rootDir')) {
-        if ((record.rootDir ?? null) !== previousRoot) record.workspaceBindingRevision = randomUUID();
+        if ((record.rootDir ?? null) !== previousRoot) {
+          record.workspaceBindingRevision = randomUUID();
+          this.run('DELETE FROM creation_doc_states WHERE creation_id=?', id);
+          this.run('DELETE FROM creation_doc_reviews WHERE creation_id=?', id);
+          this.run('DELETE FROM creation_doc_review_attempts WHERE creation_id=?', id);
+        }
         const journal = this.one('SELECT temp_files_json FROM creation_materialization_journal WHERE creation_id=?', id);
         if ((record.rootDir ?? null) !== previousRoot || (record.rootDir == null && (journal || record.pendingBindTarget))) {
           this.run('DELETE FROM creation_materialization_journal WHERE creation_id=?', id);
@@ -824,7 +829,10 @@ export class CreationStore {
     return this.transaction(() => {
       this.#checkDocReviewCreation(creationId, expectedIncarnation, expectedRootDir, expectedWorkspaceBindingRevision);
       if (attemptToken != null) {
-        const row = this.one('SELECT attempt_token FROM creation_doc_review_attempts WHERE creation_id=? AND file_path=?', creationId, filePath);
+        const row = this.one(
+          'SELECT attempt_token FROM creation_doc_review_attempts WHERE creation_id=? AND file_path=? AND expires_at > ?',
+          creationId, filePath, Date.now(),
+        );
         if (row?.attempt_token !== attemptToken) fail('STALE', 'Document review was superseded by a newer review');
       }
       this.#checkDocPathQuota(creationId, filePath);
@@ -1638,8 +1646,14 @@ export class CreationStore {
         if (Object.values(published).some(isIncompletePublication)) {
           fail('CONFLICT', 'Incomplete external materialization output remains unresolved');
         }
+        const rootChanged = (current.rootDir ?? null) !== root;
         current.rootDir = root;
         current.workspaceBindingRevision = randomUUID();
+        if (rootChanged) {
+          this.run('DELETE FROM creation_doc_states WHERE creation_id=?', id);
+          this.run('DELETE FROM creation_doc_reviews WHERE creation_id=?', id);
+          this.run('DELETE FROM creation_doc_review_attempts WHERE creation_id=?', id);
+        }
         current.boundRootIdentity = rootIdentity;
         delete current.pendingBindTarget;
         delete current.pendingBindIdentity;
@@ -1686,8 +1700,14 @@ export class CreationStore {
       if (this.one('SELECT creation_id FROM creation_materialization_journal WHERE creation_id=?', id)) {
         fail('CONFLICT', 'Resume materialization in the original target folder');
       }
+      const previousRoot = current.rootDir ?? null;
       this.#initializeWorkspace(current, { materialize: true });
       current.workspaceBindingRevision = randomUUID();
+      if ((current.rootDir ?? null) !== previousRoot) {
+        this.run('DELETE FROM creation_doc_states WHERE creation_id=?', id);
+        this.run('DELETE FROM creation_doc_reviews WHERE creation_id=?', id);
+        this.run('DELETE FROM creation_doc_review_attempts WHERE creation_id=?', id);
+      }
       this.run('UPDATE creations SET updated_at=?,data=? WHERE id=?', now(), json(current), id);
       return { creation: this.getCreation(id), rootDir: current.rootDir, materialized: true };
     });

@@ -1212,7 +1212,14 @@ export default {
     const hasDiskConflict = Vue.computed(() => Boolean(props.file?.diskChangedToBinary
       || props.file?.diskChangedOnDisk || props.file?.probingDisk));
     const saveBlocked = Vue.computed(() => props.saving || hasDiskConflict.value);
-    const finalSaveBlocked = Vue.computed(() => props.file?.isDirty || hasDiskConflict.value);
+    const isReviewSyncBlocked = Vue.computed(() => {
+      if (!props.agentId || !props.creationId || !persistedDocKey.value) return false;
+      return Boolean(
+        creationsStore?.isDocReviewRefreshing?.(props.agentId, props.creationId, persistedDocKey.value)
+        || creationsStore?.isDocReviewStale?.(props.agentId, props.creationId, persistedDocKey.value),
+      );
+    });
+    const finalSaveBlocked = Vue.computed(() => props.file?.isDirty || hasDiskConflict.value || isReviewSyncBlocked.value);
     const canvasKind = Vue.computed(() => isCanvasSupportedFile(props.file));
     const binaryDocument = Vue.computed(() => canvasKind.value === 'doc' && (props.isBinary || isBinaryDocument(props.file)));
     const isMarkdown = Vue.computed(() => MARKDOWN_EXTS.has(getExtension(props.file)));
@@ -1890,6 +1897,11 @@ export default {
       };
 
       if (snap.isDurable && snap.annotationId) {
+        if (creationsStore?.isDocReviewRefreshing?.(snap.agentId, snap.creationId, snap.persistedDocPath)
+          || creationsStore?.isDocReviewStale?.(snap.agentId, snap.creationId, snap.persistedDocPath)) {
+          applyConflictNotice.value = tr('creation.review.refreshFailed', 'Failed to sync latest review state; retry sync before continuing.');
+          return;
+        }
         const resolve = status => creationsStore.resolveReviewAnnotation(
           snap.agentId, snap.creationId, snap.persistedDocPath, snap.annotationId, status,
         );

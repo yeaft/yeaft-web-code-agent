@@ -191,7 +191,14 @@ export function createCreationBridge({ context = ctx, send = sendToServer,
         }
         const { op } = response;
         const current = readIdentity(ownerId);
-        if (op === 'cancel_client_ai_jobs') recordClientCancellation(originSocket, ownerId, targetClientId);
+        let earlyCancelled = 0;
+        if (op === 'cancel_client_ai_jobs') {
+          recordClientCancellation(originSocket, ownerId, targetClientId);
+          // Synchronously abort matching jobs in any already-cached runtime so
+          // an active review cannot commit while the serialized queue is busy.
+          const cached = !closed && cacheIdentity && sameAgent(cacheIdentity, current) && scopes.get(ownerId);
+          if (cached) earlyCancelled = cached.runtime.aiAssistant?.cancelClientJobs?.(targetClientId)?.cancelledCount || 0;
+        }
         const checkClient = () => {
           if ((op === 'inline_edit' || op === 'review_document') && isClientCancelled(originSocket, ownerId, targetClientId)) {
             fail('STALE', 'Client connection was cancelled');
@@ -202,8 +209,9 @@ export function createCreationBridge({ context = ctx, send = sendToServer,
           if (op === 'cancel_client_ai_jobs') {
             assertCurrent(current, originSocket);
             const scope = cacheIdentity && sameAgent(cacheIdentity, current) && scopes.get(ownerId);
-            return scope ? scope.runtime.request({ op, payload: msg.payload ?? {}, meta: { targetClientId, originSocket } })
+            const queued = scope ? scope.runtime.request({ op, payload: msg.payload ?? {}, meta: { targetClientId, originSocket } })
               : { cancelledCount: 0 };
+            return { cancelledCount: earlyCancelled + (queued?.cancelledCount || 0) };
           }
           checkClient();
           const scope = await serviceForOwner(current, originSocket);

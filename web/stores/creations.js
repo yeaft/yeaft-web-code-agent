@@ -60,9 +60,10 @@ function ackErrorMessage(res, fallback) {
 }
 
 export function isAmbiguousRpcResult(res) {
+  const code = res?.error?.code || res?.errorCode || res?.code;
   return !res || res.ambiguous === true
-    || ['timeout', 'disconnected', 'connection_closed', 'offline'].includes(res.error?.code || res.code)
-    || /timed?\s*out|disconnect|connection\s+closed|offline/i.test(String(res.error?.message || res.message || res.error || ''));
+    || ['timeout', 'disconnected', 'connection_closed', 'offline', 'outcome_unknown'].includes(code)
+    || /timed?\s*out|disconnect|connection\s+closed|offline|delivery\s+could\s+not\s+be\s+confirmed/i.test(String(res.error?.message || res.message || res.error || ''));
 }
 
 function extractSessionId(res) {
@@ -2634,12 +2635,20 @@ export const useCreationsStore = defineStore('creations', {
         throw new Error('Missing agentId, creationId, filePath, or annotationId');
       }
       const gen = storeGeneration;
-      const data = await this.request(targetId, 'update_review_annotation', {
-        creationId,
-        filePath,
-        annotationId,
-        status,
-      });
+      let data;
+      try {
+        data = await this.request(targetId, 'update_review_annotation', {
+          creationId,
+          filePath,
+          annotationId,
+          status,
+        });
+      } catch (err) {
+        if (gen === storeGeneration && isAmbiguousRpcResult(err)) {
+          this.reviewRefreshErrorKeys[creationDocReviewKey(targetId, creationId, filePath)] = true;
+        }
+        throw err;
+      }
       if (gen !== storeGeneration) return data;
       const canonicalPath = (typeof data?.filePath === 'string' && data.filePath) ? data.filePath : filePath;
       const rKey = creationDocReviewKey(targetId, creationId, canonicalPath);

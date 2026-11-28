@@ -410,7 +410,7 @@ export const zhCN = {
   'creation.canvas.replacedNotice': '已替换选中内容',
   'creation.canvas.backToGrid': '返回列表',
   'creation.canvas.applyConflict': '原文已发生变化，无法安全应用该建议，请手动核对或重新审稿',
-  'creation.canvas.ambiguousSelection': '该选区在源码中出现多次，请切到编辑模式精确选中后再改写',
+  'creation.canvas.ambiguousSelection': '当前选区无法在源码中唯一定位，请切到编辑模式精确选中后再改写',
 
   // Inline Quick Edit Popover
   'creation.inlineEdit.polish': '润色',
@@ -932,7 +932,7 @@ export const en = {
   'creation.canvas.replacedNotice': 'Selection replaced',
   'creation.canvas.backToGrid': 'Back to Grid',
   'creation.canvas.applyConflict': 'Document changed since review; cannot safely apply this suggestion.',
-  'creation.canvas.ambiguousSelection': 'Selection appears multiple times in source; switch to Edit mode to target it precisely.',
+  'creation.canvas.ambiguousSelection': 'Selection could not be safely matched to source; switch to Edit mode to target it precisely.',
 
   // Inline Quick Edit Popover
   'creation.inlineEdit.polish': 'Polish',
