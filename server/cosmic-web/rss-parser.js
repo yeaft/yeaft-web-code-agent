@@ -69,15 +69,16 @@ export function parseAttributesLinear(value, { boundFeedUrls = false } = {}) {
 export { parseAttributesLinear as parseAttributes };
 
 /** Scan tags once, without retrying malformed tags or searching nested candidates for a terminator. */
-export function* scanMarkup(input, { xml = false, rawTags = new Set(), emitRawOpen = false, meta = null } = {}) {
+export function* scanMarkup(input, { xml = false, rawTags = new Set(), skipTags = new Set(), emitRawOpen = false, meta = null } = {}) {
   const str = boundedMarkup(input, meta);
   let i = 0, tags = 0, raw = null;
+  const skipStack = [];
   while (i < str.length) {
     const start = i;
     if (str[i] !== '<') {
       const next = str.indexOf('<', i);
       i = next === -1 ? str.length : next;
-      if (!raw) yield { type: 'text', text: str.slice(start, i) };
+      if (!raw && skipStack.length === 0) yield { type: 'text', text: str.slice(start, i) };
       continue;
     }
     i++;
@@ -90,7 +91,7 @@ export function* scanMarkup(input, { xml = false, rawTags = new Set(), emitRawOp
       const [end, offset] = delimited;
       const stop = str.indexOf(end, i + offset);
       if (stop === -1) { if (meta) meta.truncated = true; return; }
-      if (end === ']]>') yield { type: 'cdata', text: str.slice(i + offset, stop) };
+      if (end === ']]>' && skipStack.length === 0) yield { type: 'cdata', text: str.slice(i + offset, stop) };
       i = stop + end.length;
       continue;
     }
@@ -102,7 +103,7 @@ export function* scanMarkup(input, { xml = false, rawTags = new Set(), emitRawOp
       while (i < str.length && nameChar.test(str[i])) i++;
     }
     if (!directive && nameStart === i) {
-      if (!raw) yield { type: 'text', text: str.slice(start, i) };
+      if (!raw && skipStack.length === 0) yield { type: 'text', text: str.slice(start, i) };
       continue;
     }
     const name = str.slice(nameStart, i).toLowerCase();
@@ -128,20 +129,31 @@ export function* scanMarkup(input, { xml = false, rawTags = new Set(), emitRawOp
     if (directive) continue;
     const selfClosing = str[last] === '/';
     if (raw) { raw = null; continue; }
+    if (skipStack.length > 0) {
+      if (!closing && rawTags.has(name)) { raw = name; continue; }
+      if (skipTags.has(name)) {
+        if (closing) { if (skipStack.at(-1) === name) skipStack.pop(); }
+        else skipStack.push(name);
+      }
+      continue;
+    }
     if (!closing && rawTags.has(name)) { raw = name; if (!emitRawOpen) continue; }
+    if (!closing && skipTags.has(name)) { skipStack.push(name); continue; }
     yield { type: 'tag', name, closing, selfClosing, attrsText: str.slice(attrStart, xml && selfClosing ? last : i - 1), text: str.slice(start, i), end: i };
   }
-  if (raw && meta) meta.truncated = true;
+  if ((raw || skipStack.length > 0) && meta) meta.truncated = true;
 }
 
 const mediaRawTags = new Set(['script', 'style', 'iframe', 'noembed', 'noframes', 'xmp']);
-const textRawTags = new Set(['script', 'style', 'iframe', 'noembed', 'noframes', 'xmp', 'noscript', 'template', 'textarea', 'title']);
+const mediaSkipTags = new Set(['template']);
+const textRawTags = new Set(['script', 'style', 'iframe', 'noembed', 'noframes', 'xmp', 'textarea', 'title']);
+const textSkipTags = new Set(['template', 'noscript']);
 const textBreakTags = new Set('p div section article main h1 h2 h3 h4 h5 h6 ul ol li dl dt dd pre blockquote table thead tbody tfoot tr td th caption br hr header footer nav aside figure figcaption address details summary dialog fieldset legend form menu option optgroup'.split(' '));
 export function cleanText(text, { dropTruncatedToken = false } = {}) {
   const meta = dropTruncatedToken ? { truncated: false } : null;
   const parts = [];
   let safeCut = { partsLen: 0, tailSlice: null };
-  for (const token of scanMarkup(text, { rawTags: textRawTags, meta })) {
+  for (const token of scanMarkup(text, { rawTags: textRawTags, skipTags: textSkipTags, meta })) {
     if (token.type === 'text') {
       const decoded = decodeEntities(token.text);
       if (dropTruncatedToken) {
@@ -201,7 +213,7 @@ export function normalizeMedia(candidates, base, limit = 3) {
 
 export function extractMarkupMedia(html, base, { openGraph = false, limit = 3 } = {}) {
   const metadata = [], images = [];
-  for (const token of scanMarkup(html, { rawTags: mediaRawTags })) {
+  for (const token of scanMarkup(html, { rawTags: mediaRawTags, skipTags: mediaSkipTags })) {
     if (token.type !== 'tag' || token.closing || !['img', 'meta'].includes(token.name)) continue;
     const a = parseAttributesLinear(token.attrsText);
     if (token.name === 'img' && images.length < 48 && !/\b(?:avatar|icon|logo|tracker|pixel)s?\b/i.test(`${a.class ?? ''} ${a.id ?? ''} ${a.alt ?? ''}`)) {

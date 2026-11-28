@@ -21,8 +21,8 @@ export const COSMIC_WEB_FOLLOW_UP_CAPABILITY = 'cosmic_web_follow_up';
 export const COSMIC_WEB_RADAR_CAPABILITY = 'cosmic_web_radar';
 export const COSMIC_WEB_CANCEL_CAPABILITY = 'cosmic_web_cancel';
 
-const PRIVATE_EXCERPT_VERSION = 3;
-const PRIVATE_BRIEF_CONTEXT_VERSION = 3;
+const PRIVATE_EXCERPT_VERSION = 4;
+const PRIVATE_BRIEF_CONTEXT_VERSION = 4;
 
 const BUNDLED_SKILLS_DIR = fileURLToPath(new URL('../skills/', import.meta.url));
 const SKILL_PATH = 'cosmic-web/SKILL.md';
@@ -234,8 +234,8 @@ const UNICODE_SYMBOL_RE = /\p{S}/u;
 const isWhatwgDot = code => code === 0x002e || code === 0x3002 || code === 0xff0e || code === 0xff61;
 // Percent-encoded WHATWG host dot separators normalized by Node URL parsing: %2e (.), %e3%80%82 (。), %ef%bc%8e (．), %ef%bd%a1 (｡).
 const PERCENT_WHATWG_DOT_RE = /%(?:2e|e3%80%82|ef%bc%8e|ef%bd%a1)/i;
-const ELLIPSIS_RE = /(?:\.\.|…)/u;
-const FOLLOWING_ELLIPSIS_RE = /^\s*(?:\[\s*(?:\.\.|…)\s*\]|\(\s*(?:\.\.|…)\s*\)|\.\.|…)/u;
+const ELLIPSIS_RE = /(?:\\?\.\\?\.|…|⋯)/u;
+const FOLLOWING_ELLIPSIS_RE = /^\s*(?:\\?[\[(\{【（]\s*(?:(?:\\?\.){2,}|…|⋯)\s*\\?[\])\}】）]|(?:\\?\.){2,}|…|⋯)/u;
 const TRAILING_CLOSERS_ONLY_RE = /^[\s"'>)\]}”’」』】》〉]*$/u;
 function percentWhatwgDotLenAt(str, idx) {
   if (str.charCodeAt(idx) !== 0x25) return 0;
@@ -651,10 +651,10 @@ function matchUrlStartAt(str, offset, identBeforeUnderscores = false, budget = n
       // authority fragment at EOF, OR any unresolved authority exceeding lookahead or cut-tracking capacity.
       if (k === len && (seenAt || inBrackets || seenPortColon || postAtPortColon)) return { prefixLen: 2, minEnd: k };
       if (failClosedTruncatedSchemeRelative) {
-        const tailAfterTrim = str.slice(trimmedEnd, k);
+        const tokenBody = str.slice(offset + 2, k);
         const tailAfterToken = str.slice(k, Math.min(len, k + 16));
         const effectivelyEof = k === len || (len - k <= 16 && TRAILING_CLOSERS_ONLY_RE.test(str.slice(k)));
-        if (effectivelyEof || ELLIPSIS_RE.test(tailAfterTrim) || FOLLOWING_ELLIPSIS_RE.test(tailAfterToken)) {
+        if (effectivelyEof || ELLIPSIS_RE.test(tokenBody) || FOLLOWING_ELLIPSIS_RE.test(tailAfterToken)) {
           return { prefixLen: 2, minEnd: k };
         }
       }

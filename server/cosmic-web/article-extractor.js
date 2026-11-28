@@ -1,7 +1,7 @@
 import { decodeEntities, parseAttributesLinear, resolveHttpUrl, scanMarkup } from './rss-parser.js';
 import { createRedactionBudget, redactPrivateTextMask } from './private-redactor.js';
 
-export const ARTICLE_EXTRACTOR_VERSION = 3;
+export const ARTICLE_EXTRACTOR_VERSION = 4;
 
 const discard = new Set('script style noscript svg nav header footer aside form iframe template button noembed noframes xmp'.split(' '));
 const rawTags = new Set(['script', 'style', 'iframe', 'noembed', 'noframes', 'xmp']);
@@ -53,6 +53,106 @@ function sliceDomAtSourceOffset(node, limit) {
   }
   const res = visit(node);
   return { node: res.node, openStack };
+}
+
+const TRIM_BOTH_TAGS = new Set(['em', 'i', 'strong', 'b']);
+
+function trimEdgeChildren(children, { start = false, end = false } = {}) {
+  const out = children.slice();
+  if (start) {
+    while (out.length) {
+      const first = out[0];
+      if (typeof first === 'string') {
+        const trimmed = first.trimStart();
+        if (!trimmed) { out.shift(); continue; }
+        out[0] = trimmed;
+        break;
+      }
+      if (first.tag === 'br') { out.shift(); continue; }
+      if (!blocks.has(first.tag) && first.tag !== 'pre' && first.tag !== 'code' && first.tag !== 'ul' && first.tag !== 'ol') {
+        const inner = trimEdgeChildren(first.children, { start: true });
+        if (!inner.length) { out.shift(); continue; }
+        out[0] = { ...first, children: inner };
+      }
+      break;
+    }
+  }
+  if (end) {
+    while (out.length) {
+      const last = out[out.length - 1];
+      if (typeof last === 'string') {
+        const trimmed = last.trimEnd();
+        if (!trimmed) { out.pop(); continue; }
+        out[out.length - 1] = trimmed;
+        break;
+      }
+      if (last.tag === 'br') { out.pop(); continue; }
+      if (!blocks.has(last.tag) && last.tag !== 'pre' && last.tag !== 'code' && last.tag !== 'ul' && last.tag !== 'ol') {
+        const inner = trimEdgeChildren(last.children, { end: true });
+        if (!inner.length) { out.pop(); continue; }
+        out[out.length - 1] = { ...last, children: inner };
+      }
+      break;
+    }
+  }
+  return out;
+}
+
+/**
+ * Normalize a private AI DOM clone so its structure matches the exact separators emitted by `markdown()`:
+ * - Prunes non-rendering elements (`head`, `title`, empty/whitespace-only blocks like `<p></p>`/`<p>  </p>`/`<p><br></p>`,
+ *   empty/whitespace-only inline wrappers like `<span> </span>`/`<em> </em>`/`<code> </code>`, and empty lists).
+ * - Flattens `<code>` and `<pre>` to their exact `plain()` rendered text leaf (so nested blocks or trailing spaces inside
+ *   `<code>` cannot desynchronize DOM redaction from `markdown()`).
+ * - Strips `<a href>` and trims leading/trailing edge whitespace/`<br>` on `em`/`i`/`strong`/`b`.
+ * - Preserves `cutoffSet` node mapping so `trimTrailingSourceToken` and `redactDomPrivateUrls` see exact rendered boundaries.
+ */
+function normalizePrivateAiDom(rootNode, openStack = []) {
+  const openSet = new Set(openStack);
+  const cutoffSet = new Set();
+
+  function visit(n) {
+    if (typeof n === 'string') {
+      return { node: n, visible: n.trim().length > 0 };
+    }
+    const { tag, children } = n;
+    if (tag === 'head' || tag === 'title') return { node: null, visible: false };
+    if (tag === 'br') return { node: n, visible: false };
+    if (tag === 'pre') {
+      const text = plain(n).trimEnd();
+      const clone = { ...n, attrs: {}, children: text ? [text] : [] };
+      if (openSet.has(n)) cutoffSet.add(clone);
+      return { node: clone, visible: true };
+    }
+    if (tag === 'code') {
+      const text = plain(n).trimEnd().replace(/\n/g, ' ');
+      if (!text.trim()) return { node: null, visible: false };
+      const clone = { ...n, attrs: {}, children: [text] };
+      if (openSet.has(n)) cutoffSet.add(clone);
+      return { node: clone, visible: true };
+    }
+
+    const rawKids = (tag === 'ul' || tag === 'ol') ? children.filter(c => c.tag === 'li') : children;
+    const outChildren = [];
+    let visible = false;
+    for (const child of rawKids) {
+      const res = visit(child);
+      if (res.node != null) outChildren.push(res.node);
+      if (res.visible) visible = true;
+    }
+    if (!visible) return { node: null, visible: false };
+
+    const normalizedChildren = TRIM_BOTH_TAGS.has(tag)
+      ? trimEdgeChildren(outChildren, { start: true, end: true })
+      : outChildren;
+    const attrs = tag === 'a' ? {} : n.attrs;
+    const clone = { ...n, attrs, children: normalizedChildren };
+    if (openSet.has(n)) cutoffSet.add(clone);
+    return { node: clone, visible: true };
+  }
+
+  const res = visit(rootNode);
+  return { node: res.node, cutoffSet };
 }
 
 /**
@@ -151,7 +251,9 @@ function redactDomPrivateUrls(rootNode) {
       const mat = materialize(child);
       if (mat != null) outChildren.push(mat);
     }
-    if (hadChildren && outChildren.length === 0) return null;
+    if (hadChildren && outChildren.length === 0) {
+      return orig !== rootNode && blocks.has(orig.tag) ? { tag: 'br', attrs: {}, hidden: false, children: [] } : null;
+    }
     const attrs = orig.tag === 'a' ? {} : orig.attrs;
     return { ...orig, attrs, children: outChildren };
   }
@@ -334,10 +436,13 @@ export function extractCleanArticle(html, sourceUrl, fallbackTitle = '') {
   const truncated = !blockedTitle && (fullRendered.length > 40_000 || sourceTruncated);
   const rendered = fullRendered.slice(0, 40_000);
   // Derive a source-DOM-redacted, cutoff-safe AI projection BEFORE Markdown syntax is synthesized
-  // (preventing inline <code> backticks/spaces or 40k caps from splitting URLs, while keeping Clean Article display intact).
+  // (normalizing empty/non-rendering blocks & edge trims to match `markdown()` separators, keeping Clean Article display intact).
   let aiMarkdown = '';
   if (!blockedTitle) {
-    const sourceSafeBest = bestWasTruncated ? trimTrailingSourceToken(best, new Set(openStack)).node : best;
+    const { node: normalizedBest, cutoffSet } = normalizePrivateAiDom(best, openStack);
+    const sourceSafeBest = normalizedBest
+      ? (bestWasTruncated ? trimTrailingSourceToken(normalizedBest, cutoffSet).node : normalizedBest)
+      : null;
     const redactedBest = sourceSafeBest ? redactDomPrivateUrls(sourceSafeBest) : null;
     aiMarkdown = redactedBest ? renderBoundedAiMarkdown(redactedBest, url, 40_000) : '';
   }

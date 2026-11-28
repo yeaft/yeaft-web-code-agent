@@ -16,7 +16,7 @@ import { ARTICLE_EXTRACTOR_VERSION, extractCleanArticle } from './article-extrac
 import { buildGraphProjection, canonicalizeUrl, CLUSTER_THRESHOLD, CLUSTER_WINDOW_MS, clusterSimilarity, computeHeatScore, extractTokens } from './clusterer.js';
 import { clearAllCosmicWebAiRequests, listCapableAgentsForUser, requestCosmicWebAi, validateCosmicWebAiResult } from './ai-bridge.js';
 
-export const PRIVATE_BRIEF_CONTEXT_VERSION = 3;
+export const PRIVATE_BRIEF_CONTEXT_VERSION = 4;
 
 const briefContextFallbackSecret = randomBytes(32).toString('hex');
 function briefContextSigningKey() {
@@ -528,7 +528,7 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     ensureActive(userId);
     const { perspective, language, explicitAgentId, agent } = options;
     // Version the rendering and private-provenance contracts: old cached private responses may contain pre-upgrade excerpts or unredacted TLDRs.
-    const key = hash(payload.isPrivateSource ? 7 : 5, mode, perspective, language, explicitAgentId, payload);
+    const key = hash(payload.isPrivateSource ? 8 : 5, mode, perspective, language, explicitAgentId, payload);
     const cached = db.getAiCache(userId, key, now());
     if (cached && body.force !== true) {
       const media = Array.isArray(cached.media) ? signMediaList(cached.media, userId) : cached.media;

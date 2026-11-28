@@ -2204,6 +2204,221 @@ describe('2.0 graph and AI contracts', () => {
     expect(r7Prompts.at(-1)).not.toContain('Old v2 radar');
     expect(r7Prompts.at(-1)).not.toContain('OLDV2RADAR1500CLIP99');
 
+    // Round 29 (PR #2032 Round 8) Blocker #1/#2/#3 isolated end-to-end regressions:
+    // (1) Empty/whitespace/`<br>`-only blocks (`<p></p>`, `<p>  </p>`, `<div><br></div>`, `<span> </span>`, `<em> </em>`),
+    //     nested block in `<code>`, and edge-trimmed spaces in `<code>`/`<em>` no longer split DOM redaction runs;
+    //     Clean Article display remains intact while real Agent model prompt receives ZERO credential markers; v3 caches are rejected.
+    // (2) Nesting-aware discarded container skipping (`<template><template></template>discarded </template>`, `<noscript>`, `<template><script>...</script></template>`, unclosed nested `<template>`):
+    //     persists clean v4 excerpt with ZERO markers or discarded text and invalidates pre-fix v3 DB excerpts.
+    // (3) Attached balanced abbreviation markers (`//TLDRMARKER(…) next fact.`, `//RADARMARKER[…] next fact.`, `//RADARMARKER[...] next fact.`)
+    //     in private TLDR -> cross-Agent HMAC followUp AND real Radar WebSearch -> SQLite -> subsequent private aiBrief; rejects old v3 provenance.
+    const r8EmptyBlocksHtml = '<article>Safe r8 article <code>//R8ARTICLEMARKER99</code><p></p>@intranet:8080/api and <code>//R8WSP99</code><p>   </p>@intranet:8080/x and <code>//R8DIVBR99</code><div><br></div>@intranet:8080/y and <code><p>//R8CODEP99</p></code>@intranet:8080/z and <code>//R8CODESP99 </code>@intranet:8080/w and <em>//R8EMTRAIL99 </em><code>@intranet:8080/q</code> end.</article>';
+    const r8FeedRss = `<rss><channel>
+      <item><title>Zeta Empty Block Article</title><link>https://private.example/r8-empty-blocks</link><description>Empty block desc</description></item>
+      <item><title>Eta Nested Template Feed</title><link>https://private.example/r8-nested-template</link><description><![CDATA[Safe RSS //R8RSSMARKER99<wbr><template><template></template>discarded </template>@intranet:8080/api and //R8TSMARKER99<wbr><template><script>var s = "</template>";</script>discarded </template>@intranet:8080/b after.]]></description></item>
+      <item><title>Theta Unclosed Nested Template</title><link>https://private.example/r8-unclosed-template</link><description><![CDATA[Safe unclosed //R8UNCLOSEDTPL99<wbr><template><template></template>@intranet:8080]]></description></item>
+    </channel></rss>`;
+    const r8Prompts = [];
+    const r8RadarUrl = 'https://radar.example/r8-abbr';
+    const r8AgentAi = vi.fn(async ({ mode, perspective, language, payload }) => {
+      if (mode === 'topic_radar') {
+        const WebSearch = vi.fn().mockResolvedValue({
+          provider: 'generic',
+          results: [{ url: r8RadarUrl, title: 'R8 Abbr Radar Story', snippet: 'SafeR8Radar //R8RADARMARKER99[…] //R8RADARBRK99[...] //R8RADARPAR99(…) next fact.' }],
+        });
+        const radarAdapter = {
+          captureStream: vi.fn()
+            .mockImplementationOnce(async function* () { yield { type: 'tool_call', id: 'r8tc1', name: 'WebSearch', input: { query: 'r8 abbr', limit: 5 } }; })
+            .mockImplementationOnce(async function* () {}),
+          call: vi.fn().mockImplementation(async req => {
+            r8Prompts.push(JSON.stringify(req));
+            const toolMsg = req.messages.find(m => m.role === 'tool')?.content ?? '';
+            const parsedTool = JSON.parse(toolMsg.replace(/^<untrusted_web_result>\n|\n<\/untrusted_web_result>$/g, ''));
+            return {
+              text: JSON.stringify({
+                items: parsedTool.results.map(r => ({
+                  title: r.title, url: r.url, sourceName: 'R8Wire', summaryExcerpt: r.snippet,
+                })),
+                searchCount: 1,
+              }),
+            };
+          }),
+        };
+        const { result } = await runCosmicWebBriefing({
+          mode, perspective, language, payload,
+          config: { fastModel: 'test/fast', defaultModel: 'test/fast' },
+          adapter: radarAdapter, toolExecutors: { WebSearch },
+        });
+        return result;
+      }
+      const adapter = {
+        async call(req) {
+          r8Prompts.push(JSON.stringify(req));
+          if (mode === 'follow_up') {
+            return { text: JSON.stringify({ question: 'q', answer: 'ok', bullets: ['one'], followUps: ['q1'] }) };
+          }
+          return {
+            text: JSON.stringify({
+              tldr: 'SafeR8Tldr //R8TLDRPAR99(…) //R8TLDRBRK99[…] //R8TLDRDOT99[...] next fact.',
+              bullets: ['Safe bullet one', 'Safe bullet two'],
+              impact: 'Safe impact',
+              followUps: ['q1', 'q2'],
+            }),
+          };
+        },
+      };
+      const { result } = await runCosmicWebBriefing({
+        mode, perspective, language, payload,
+        config: { fastModel: 'test/fast', defaultModel: 'test/fast' },
+        adapter,
+      });
+      return result;
+    });
+    const r8FeedUrl = 'https://private.example/r8.xml';
+    const r8Clock = NOW + 400_000;
+    const r8Svc = makeService({
+      fetcher: async url => {
+        if (url === r8FeedUrl) return { status: 200, url, text: async () => r8FeedRss };
+        if (url.endsWith('/r8-empty-blocks')) return { status: 200, url, text: async () => r8EmptyBlocksHtml };
+        return { status: 200, url, text: async () => '<article><p>ok</p></article>' };
+      },
+      requestAi: r8AgentAi,
+      now: () => r8Clock,
+    });
+    await r8Svc.savePreferences('maya', {
+      enabledDomainIds: [],
+      customDomains: [
+        { id: 'priv-r8', name: 'Priv R8', colorToken: 'cyan', enabled: true, keywords: [], rssUrls: [r8FeedUrl] },
+        { id: 'radar-r8', name: 'Radar R8', colorToken: 'gold', enabled: true, keywords: ['r8'], aiRadar: true, rssUrls: [] },
+      ],
+    });
+    await r8Svc.refresh('maya', { domainId: 'priv-r8', force: true });
+    agents.set('v4-maya-a', {
+      ownerId: 'maya', name: 'v4-maya-a',
+      capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up', 'cosmic_web_radar', 'cosmic_web_research'],
+      encryptOutbound: false, ws: { readyState: 1, send: () => {} },
+    });
+    agents.set('v4-maya-b', {
+      ownerId: 'maya', name: 'v4-maya-b',
+      capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up'],
+      encryptOutbound: false, ws: { readyState: 1, send: () => {} },
+    });
+    const mayaFeed = r8Svc.feed('maya', { domainId: 'priv-r8' });
+    const r8ArticleCluster = mayaFeed.clusters.find(c => c.headline === 'Zeta Empty Block Article');
+    const r8TplCluster = mayaFeed.clusters.find(c => c.headline === 'Eta Nested Template Feed');
+    const r8UnclosedTplCluster = mayaFeed.clusters.find(c => c.headline === 'Theta Unclosed Nested Template');
+
+    // (1a) Non-truncated article with empty `<p></p>` / `<p>  </p>` / `<div><br></div>` / `<code><p>...</p></code>` / trailing spaces:
+    //      Clean Article display keeps original Markdown while real Agent model prompt receives ZERO credential markers
+    const r8DisplayArt = await r8Svc.article('maya', r8ArticleCluster.id);
+    expect(r8DisplayArt.extractorVersion).toBe(ARTICLE_EXTRACTOR_VERSION);
+    expect(r8DisplayArt.markdown).toContain('` //R8ARTICLEMARKER99 `@intranet:8080/api');
+    await r8Svc.aiBrief('maya', 'user', r8ArticleCluster.id, { agentId: 'v4-maya-a', research: true });
+    expect(r8Prompts.at(-1)).toContain('Safe r8 article');
+    for (const secret of ['R8ARTICLEMARKER99', 'R8WSP99', 'R8DIVBR99', 'R8CODEP99', 'R8CODESP99', 'R8EMTRAIL99']) {
+      expect(r8Prompts.at(-1)).not.toContain(secret);
+    }
+    // (1b) Pre-fix v3 (`extractorVersion: 3`) cached article row is NOT trusted by private `aiBrief`
+    db.setArticleCache('maya', r8DisplayArt.itemId, {
+      title: 'Old v3', markdown: 'Old v3 ` //OLDV3EMPTY99 `@intranet:8080', aiMarkdown: 'Old v3 ` //OLDV3EMPTY99 `@intranet:8080',
+      extractorVersion: 3, truncated: false, quality: 'full', itemId: r8DisplayArt.itemId, clusterId: r8ArticleCluster.id, summaryExcerpt: 'Old',
+    }, r8Clock + HOUR);
+    await r8Svc.aiBrief('maya', 'user', r8ArticleCluster.id, { skipArticleFetch: true, agentId: 'v4-maya-a', research: true, force: true });
+    expect(r8AgentAi.mock.lastCall[0].payload.articleMarkdown).toBeUndefined();
+    expect(r8Prompts.at(-1)).not.toContain('OLDV3EMPTY99');
+
+    // (2a) Nested `<template><template></template>discarded </template>` and `<template><script>...</script></template>`:
+    //      persisted clean as v4 with ZERO markers or discarded text, and clean in model prompt
+    expect(r8TplCluster.summaryExcerpt).toContain('Safe RSS');
+    expect(r8TplCluster.summaryExcerpt).toContain('after.');
+    expect(r8TplCluster.summaryExcerpt).not.toContain('R8RSSMARKER99');
+    expect(r8TplCluster.summaryExcerpt).not.toContain('R8TSMARKER99');
+    expect(r8TplCluster.summaryExcerpt).not.toContain('discarded');
+    expect(r8UnclosedTplCluster.summaryExcerpt).toBe('Safe unclosed');
+    expect(r8UnclosedTplCluster.summaryExcerpt).not.toContain('R8UNCLOSEDTPL99');
+    await r8Svc.aiBrief('maya', 'user', r8TplCluster.id, { skipArticleFetch: true, agentId: 'v4-maya-a', research: true });
+    expect(r8Prompts.at(-1)).toContain('Safe RSS');
+    expect(r8Prompts.at(-1)).not.toContain('R8RSSMARKER99');
+    expect(r8Prompts.at(-1)).not.toContain('R8TSMARKER99');
+    expect(r8Prompts.at(-1)).not.toContain('discarded');
+
+    // (3a) Private TLDR with attached balanced abbreviation markers (`(…)`, `[…]`, `[...]`) followed by prose:
+    //      scrubbed BEFORE HMAC certification and absent in cross-Agent authenticated follow-up model prompt
+    const r8Brief = await r8Svc.aiBrief('maya', 'user', r8TplCluster.id, { skipArticleFetch: true, agentId: 'v4-maya-a', research: true, force: true });
+    expect(r8Brief.briefContextVersion).toBe(PRIVATE_BRIEF_CONTEXT_VERSION);
+    expect(typeof r8Brief.briefContextToken).toBe('string');
+    expect(r8Brief.tldr).toContain('SafeR8Tldr');
+    expect(r8Brief.tldr).toContain('next fact.');
+    for (const secret of ['R8TLDRPAR99', 'R8TLDRBRK99', 'R8TLDRDOT99']) {
+      expect(r8Brief.tldr).not.toContain(secret);
+    }
+    await r8Svc.followUp('maya', 'user', r8TplCluster.id, {
+      question: 'Cross agent follow-up?',
+      briefContext: r8Brief.tldr,
+      briefContextToken: r8Brief.briefContextToken,
+      agentId: 'v4-maya-b',
+      research: true,
+    });
+    expect(r8Prompts.at(-1)).toContain('SafeR8Tldr');
+    expect(r8Prompts.at(-1)).toContain('next fact.');
+    for (const secret of ['R8TLDRPAR99', 'R8TLDRBRK99', 'R8TLDRDOT99']) {
+      expect(r8Prompts.at(-1)).not.toContain(secret);
+    }
+
+    // (3b) Real generic WebSearch Radar result with attached balanced abbreviation markers (`[…]`, `[...]`, `(…)`):
+    //      stripped BEFORE Radar model sees it, absent from v4 DB excerpt and subsequent private briefing model prompt
+    const r8RadarRes = await r8Svc.radarScan('maya', 'user', 'radar-r8');
+    expect(r8RadarRes.added).toBe(1);
+    const r8RadarCluster = r8Svc.feed('maya', { domainId: 'radar-r8' }).clusters.find(c => c.headline === 'R8 Abbr Radar Story');
+    expect(r8RadarCluster.summaryExcerpt).toContain('SafeR8Radar');
+    expect(r8RadarCluster.summaryExcerpt).toContain('next fact.');
+    for (const secret of ['R8RADARMARKER99', 'R8RADARBRK99', 'R8RADARPAR99']) {
+      expect(r8RadarCluster.summaryExcerpt).not.toContain(secret);
+    }
+    await r8Svc.aiBrief('maya', 'user', r8RadarCluster.id, { skipArticleFetch: true, agentId: 'v4-maya-a', research: true });
+    expect(r8Prompts.at(-1)).toContain('SafeR8Radar');
+    for (const secret of ['R8RADARMARKER99', 'R8RADARBRK99', 'R8RADARPAR99']) {
+      expect(r8Prompts.at(-1)).not.toContain(secret);
+    }
+
+    // (3c) Old v3 (`excerptVersion: 3`) Radar output and old v3 (`briefContextVersion: 3`) private brief output are rejected/omitted!
+    const oldV3ReqAi = vi.fn(async req => {
+      if (req.mode === 'topic_radar') {
+        return {
+          items: [{ title: 'Old V3 Radar Story', url: 'https://radar.example/old-v3-radar', sourceName: 'V3Radar', summaryExcerpt: 'Old v3 radar display' }],
+          searchCount: 1,
+          excerptVersion: 3,
+        };
+      }
+      if (req.mode === 'brief') {
+        return {
+          tldr: 'Old v3 uncertified TLDR //OLDV3TLDR99(…) next',
+          sections: [{ heading: 'H', body: 'Body' }],
+          bullets: ['b1', 'b2'], impact: 'ok', media: [], communityHighlights: [], citations: [],
+          followUps: ['q1', 'q2'], researched: false, searchCount: 0, evidenceCount: 0, fullMarkdown: 'Safe md',
+          briefContextVersion: 3,
+        };
+      }
+      return r8AgentAi(req);
+    });
+    const oldV3Svc = makeService({ requestAi: oldV3ReqAi, now: () => r8Clock + 120_000 });
+    await oldV3Svc.radarScan('maya', 'user', 'radar-r8');
+    const oldV3RadarCluster = oldV3Svc.feed('maya', { domainId: 'radar-r8' }).clusters.find(c => c.headline === 'Old V3 Radar Story');
+    expect(oldV3RadarCluster.summaryExcerpt).toBe('Old v3 radar display');
+    await oldV3Svc.aiBrief('maya', 'user', oldV3RadarCluster.id, { skipArticleFetch: true, agentId: 'v4-maya-a', research: true });
+    expect(oldV3ReqAi.mock.lastCall[0].payload.summaryExcerpt).toBe('');
+    const oldV3BriefRes = await oldV3Svc.aiBrief('maya', 'user', r8UnclosedTplCluster.id, { skipArticleFetch: true, agentId: 'v4-maya-b', research: true, force: true });
+    expect(oldV3BriefRes.briefContextToken).toBeUndefined();
+    expect(oldV3BriefRes.briefContextVersion).toBeUndefined();
+    await oldV3Svc.followUp('maya', 'user', r8UnclosedTplCluster.id, {
+      question: 'Follow up after old v3 brief?',
+      briefContext: oldV3BriefRes.tldr,
+      agentId: 'v4-maya-b',
+      research: true,
+    });
+    expect(r8AgentAi.mock.lastCall[0].payload.briefContext).toBeUndefined();
+    expect(r8Prompts.at(-1)).not.toContain('OLDV3TLDR99');
+
     // Mixed public/private dailyBriefing carries per-story isPrivateSource: true on private stories (enabling Agent defense-in-depth) while keeping public stories clean.
     const mixedDailyReqAi = vi.fn(async () => dailyResult);
     const mixedDailySvc = makeService({ requestAi: mixedDailyReqAi });
